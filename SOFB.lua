@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════╗
-    ║       Origin's SOFB Hub  v3.1                 ║
+    ║       Origin's SOFB Hub  v3.2                 ║
     ║  Login │ Key System │ UI Library │ Auto-TP    ║
     ╚═══════════════════════════════════════════════╝
 ]]
@@ -152,6 +152,40 @@ local validAdmins = loadAdmins()
 local isOwner     = false
 local isAdmin     = false
 local isAuthenticated = false
+local currentKeyPlan    = nil   -- e.g. "STARTER", "MONTHLY", "PRO", "ELITE", "LIFETIME"
+local currentKeyExpires = nil   -- e.g. "2026-04-04 20:00" or nil for LIFETIME
+local currentKeyData    = nil   -- full key table reference
+
+-- ════════════════════════════════════════════
+--  SUBSCRIPTION PLANS
+-- ════════════════════════════════════════════
+local PLANS = {
+    { id="STARTER",  label="Starter",  days=7,   color=Color3.fromRGB(120,200,255),  icon="🥉" },
+    { id="MONTHLY",  label="Monthly",  days=30,  color=Color3.fromRGB(100,220,130),  icon="🥈" },
+    { id="PRO",      label="Pro",      days=90,  color=Color3.fromRGB(160,100,255),  icon="🥇" },
+    { id="ELITE",    label="Elite",    days=180, color=Color3.fromRGB(255,160,40),   icon="💎" },
+    { id="LIFETIME", label="Lifetime", days=nil, color=Color3.fromRGB(255,215,0),    icon="👑" },
+}
+local PLAN_MAP = {}
+for _, p in ipairs(PLANS) do PLAN_MAP[p.id] = p end
+
+local function getPlanInfo(planId)
+    return PLAN_MAP[planId] or { id="?", label="Unknown", days=nil, color=T.TextMuted, icon="❓" }
+end
+
+local function calcExpiry(days)
+    if not days then return nil end
+    return os.date("%Y-%m-%d %H:%M", os.time() + days * 86400)
+end
+
+local function isKeyExpired(expiresStr)
+    if not expiresStr then return false end
+    -- parse "YYYY-MM-DD HH:MM"
+    local y,mo,d,h,mi = expiresStr:match("(%d+)-(%d+)-(%d+) (%d+):(%d+)")
+    if not y then return false end
+    local expTs = os.time({year=tonumber(y),month=tonumber(mo),day=tonumber(d),hour=tonumber(h),min=tonumber(mi),sec=0})
+    return os.time() > expTs
+end
 
 local function generateKey()
     local guid = HttpService:GenerateGUID(false):gsub("-", "")
@@ -171,6 +205,7 @@ end
 local function validateKey(input)
     if input == OWNER_KEY then
         isOwner = true; isAuthenticated = true
+        currentKeyPlan = "LIFETIME"; currentKeyExpires = nil
         return true, "owner"
     end
     -- Check admin keys first
@@ -178,6 +213,7 @@ local function validateKey(input)
     for _, a in ipairs(validAdmins) do
         if a.key == input and a.active then
             isAdmin = true; isAuthenticated = true
+            currentKeyPlan = "ELITE"; currentKeyExpires = a.expires or nil
             return true, "admin"
         end
     end
@@ -185,7 +221,14 @@ local function validateKey(input)
     validKeys = loadKeys()
     for _, k in ipairs(validKeys) do
         if k.key == input and k.active then
+            -- Check expiry
+            if isKeyExpired(k.expires) then
+                return false, nil  -- key expired
+            end
             isAuthenticated = true
+            currentKeyPlan    = k.plan or "STARTER"
+            currentKeyExpires = k.expires or nil
+            currentKeyData    = k
             return true, "user"
         end
     end
@@ -209,7 +252,7 @@ local Settings = {
     ESP          = false,
     Sounds       = true,
     Binds        = {
-        Zone12     = "G",
+        BestZone   = "G",
         PlotBase   = "B",
         ToggleHub  = "RightShift",
         AdminPanel = "K",
@@ -217,11 +260,11 @@ local Settings = {
     Rarities     = {
         NORMAL = false, GOLDEN = false, DIAMOND = false, EMERALD = false,
         RUBY = true, RAINBOW = true, VOID = true, ETHEREAL = true, CELESTIAL = true,
-        SECRET = true, ANCIENT = true, MYTHICAL = true,
+        SECRET = true, ANCIENT = true, MYTHICAL = true, RADIOACTIVE = true,
     },
 }
 
-local RarityOrder = {"NORMAL","GOLDEN","DIAMOND","EMERALD","RUBY","RAINBOW","VOID","ETHEREAL","CELESTIAL","SECRET","ANCIENT","MYTHICAL"}
+local RarityOrder = {"NORMAL","GOLDEN","DIAMOND","EMERALD","RUBY","RAINBOW","VOID","ETHEREAL","CELESTIAL","SECRET","ANCIENT","MYTHICAL","RADIOACTIVE"}
 
 local Stats = {SessionStart = tick(), TotalTPs = 0, RarityFinds = {}}
 for _,r in ipairs(RarityOrder) do Stats.RarityFinds[r]=0 end
@@ -300,12 +343,14 @@ local T = {
         SECRET   = Color3.fromRGB(255, 215, 0),    -- Shimmering gold
         ANCIENT  = Color3.fromRGB(210, 105, 30),   -- Deep bronze/amber
         MYTHICAL = Color3.fromRGB(255, 80, 220),   -- Vibrant magenta-pink
+        RADIOACTIVE = Color3.fromRGB(50, 255, 50), -- Bright green
     },
     RarityTier = {
         NORMAL="⬜ Common", GOLDEN="🟨 Uncommon", DIAMOND="🟦 Rare",
         EMERALD="🟩 Epic", RUBY="🟥 Legendary", RAINBOW="🌈 Mythic",
         VOID="🟪 Void", ETHEREAL="👁 Ethereal", CELESTIAL="⭐ Celestial",
         SECRET="🔐 Secret", ANCIENT="🏛 Ancient", MYTHICAL="✨ Mythical",
+        RADIOACTIVE="☢️ Radioactive",
     },
 }
 
@@ -401,11 +446,11 @@ notifPadding.Parent = notifContainer
 local notifCount = 0
 
 local NOTIF_TYPES = {
-    success = {icon = "✓", color = T.On, glow = Color3.fromRGB(40, 180, 80)},
-    error   = {icon = "✕", color = T.Danger, glow = Color3.fromRGB(200, 40, 40)},
-    warning = {icon = "⚠", color = T.Warning, glow = Color3.fromRGB(200, 160, 30)},
-    info    = {icon = "◈", color = T.Accent, glow = T.AccentDark},
-    rarity  = {icon = "⚡", color = T.Accent, glow = T.AccentDark},
+    success = {color = Color3.fromRGB(60, 220, 120)},
+    error   = {color = Color3.fromRGB(255, 80, 80)},
+    warning = {color = Color3.fromRGB(250, 190, 60)},
+    info    = {color = T.Accent},
+    rarity  = {color = T.Accent},
 }
 
 local function notify(title, body, nType, duration, customColor)
@@ -417,38 +462,31 @@ local function notify(title, body, nType, duration, customColor)
 
     local card = Instance.new("Frame")
     card.Name = "Notif_"..order; card.Size = UDim2.new(1, 0, 0, 0)
-    card.BackgroundColor3 = Color3.fromRGB(14, 14, 24); card.BackgroundTransparency = 1
+    card.BackgroundColor3 = Color3.fromRGB(12, 12, 18); card.BackgroundTransparency = 1
     card.BorderSizePixel = 0; card.LayoutOrder = order; card.ClipsDescendants = true
     card.Parent = notifContainer
-    corner(card, 12)
+    corner(card, 8)
 
     -- Glass overlay
     local glass = Instance.new("Frame")
     glass.Size = UDim2.new(1, 0, 1, 0); glass.BackgroundColor3 = color
-    glass.BackgroundTransparency = 0.94; glass.BorderSizePixel = 0; glass.Parent = card
+    glass.BackgroundTransparency = 0.96; glass.BorderSizePixel = 0; glass.Parent = card
 
     local cardStroke = stroke(card, color, 1); cardStroke.Transparency = 1
 
-    -- Accent bar
-    local bar = Instance.new("Frame")
-    bar.Size = UDim2.new(0, 3, 1, -12); bar.Position = UDim2.new(0, 8, 0, 6)
-    bar.BackgroundColor3 = color; bar.BorderSizePixel = 0; bar.BackgroundTransparency = 1
-    bar.Parent = card; corner(bar, 2)
-
-    -- Icon circle
-    local iconBg = Instance.new("Frame")
-    iconBg.Size = UDim2.new(0, 28, 0, 28); iconBg.Position = UDim2.new(0, 18, 0, 10)
-    iconBg.BackgroundColor3 = color; iconBg.BackgroundTransparency = 0.85
-    iconBg.BorderSizePixel = 0; iconBg.Parent = card; corner(iconBg, 14)
-
-    local iconLbl = Instance.new("TextLabel")
-    iconLbl.Size = UDim2.new(1, 0, 1, 0); iconLbl.BackgroundTransparency = 1
-    iconLbl.Text = style.icon; iconLbl.TextColor3 = color; iconLbl.TextSize = 14
-    iconLbl.Font = Enum.Font.GothamBold; iconLbl.TextTransparency = 1; iconLbl.Parent = iconBg
+    -- Left accent line
+    local leftBar = Instance.new("Frame")
+    leftBar.Size = UDim2.new(0, 3, 1, 0); leftBar.Position = UDim2.new(0, 0, 0, 0)
+    leftBar.BackgroundColor3 = color; leftBar.BorderSizePixel = 0; leftBar.BackgroundTransparency = 1
+    leftBar.Parent = card; corner(leftBar, 0)
+    local barGrad = Instance.new("UIGradient")
+    barGrad.Rotation = 90
+    barGrad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.new(1,1,1)), ColorSequenceKeypoint.new(1, color)})
+    barGrad.Parent = leftBar
 
     -- Title
     local titleLbl = Instance.new("TextLabel")
-    titleLbl.Size = UDim2.new(1, -60, 0, 16); titleLbl.Position = UDim2.new(0, 52, 0, 8)
+    titleLbl.Size = UDim2.new(1, -24, 0, 16); titleLbl.Position = UDim2.new(0, 12, 0, 8)
     titleLbl.BackgroundTransparency = 1; titleLbl.Text = title; titleLbl.TextColor3 = T.Text
     titleLbl.TextSize = 13; titleLbl.Font = Enum.Font.GothamBold
     titleLbl.TextXAlignment = Enum.TextXAlignment.Left; titleLbl.TextTransparency = 1
@@ -456,33 +494,32 @@ local function notify(title, body, nType, duration, customColor)
 
     -- Body
     local bodyLbl = Instance.new("TextLabel")
-    bodyLbl.Size = UDim2.new(1, -60, 0, 0); bodyLbl.Position = UDim2.new(0, 52, 0, 26)
+    bodyLbl.Size = UDim2.new(1, -24, 0, 0); bodyLbl.Position = UDim2.new(0, 12, 0, 26)
     bodyLbl.BackgroundTransparency = 1; bodyLbl.Text = body; bodyLbl.TextColor3 = T.TextDim
     bodyLbl.TextSize = 11; bodyLbl.Font = Enum.Font.Gotham
     bodyLbl.TextXAlignment = Enum.TextXAlignment.Left; bodyLbl.TextWrapped = true
     bodyLbl.AutomaticSize = Enum.AutomaticSize.Y; bodyLbl.TextTransparency = 1
     bodyLbl.Parent = card
 
-    -- Progress bar
+    -- Progress bar (bottom)
     local progBg = Instance.new("Frame")
-    progBg.Size = UDim2.new(1, -24, 0, 2); progBg.Position = UDim2.new(0, 12, 1, -6)
+    progBg.Size = UDim2.new(1, 0, 0, 2); progBg.Position = UDim2.new(0, 0, 1, -2)
     progBg.BackgroundColor3 = T.Off; progBg.BorderSizePixel = 0
-    progBg.BackgroundTransparency = 1; progBg.Parent = card; corner(progBg, 1)
+    progBg.BackgroundTransparency = 1; progBg.Parent = card
 
     local progFill = Instance.new("Frame")
     progFill.Size = UDim2.new(1, 0, 1, 0); progFill.BackgroundColor3 = color
     progFill.BorderSizePixel = 0; progFill.BackgroundTransparency = 1
-    progFill.Parent = progBg; corner(progFill, 1)
+    progFill.Parent = progBg
 
     -- Animate in
-    tw(card, {Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 0.05}, 0.35, Enum.EasingStyle.Back)
+    tw(card, {Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 0.1}, 0.35, Enum.EasingStyle.Back)
     task.delay(0.1, function()
-        tw(cardStroke, {Transparency = 0.4}, 0.3)
-        tw(bar, {BackgroundTransparency = 0}, 0.3)
-        tw(iconLbl, {TextTransparency = 0}, 0.3)
+        tw(cardStroke, {Transparency = 0.5}, 0.3)
+        tw(leftBar, {BackgroundTransparency = 0.15}, 0.3)
         tw(titleLbl, {TextTransparency = 0}, 0.3)
         tw(bodyLbl, {TextTransparency = 0}, 0.3)
-        tw(progBg, {BackgroundTransparency = 0}, 0.3)
+        tw(progBg, {BackgroundTransparency = 0.7}, 0.3)
         tw(progFill, {BackgroundTransparency = 0}, 0.3)
     end)
     task.delay(0.4, function()
@@ -491,8 +528,7 @@ local function notify(title, body, nType, duration, customColor)
     task.delay(duration, function()
         tw(card, {BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0)}, 0.3)
         tw(cardStroke, {Transparency = 1}, 0.2)
-        tw(bar, {BackgroundTransparency = 1}, 0.2)
-        tw(iconLbl, {TextTransparency = 1}, 0.2)
+        tw(leftBar, {BackgroundTransparency = 1}, 0.2)
         tw(titleLbl, {TextTransparency = 1}, 0.2)
         tw(bodyLbl, {TextTransparency = 1}, 0.2)
         tw(progBg, {BackgroundTransparency = 1}, 0.2)
@@ -502,7 +538,7 @@ local function notify(title, body, nType, duration, customColor)
 end
 
 local function notifyRarity(rarity, name)
-    notify("🔥  "..rarity.." FOUND!", "Teleporting to: "..name.."\n"..(T.RarityTier[rarity] or ""), "rarity", 5, T.Rarity[rarity])
+    notify(rarity.." FOUND!", name.."\n"..(T.RarityTier[rarity] or ""), "rarity", 6, T.Rarity[rarity])
 end
 local function notifySuccess(t, b) notify(t, b, "success", 3) end
 local function notifyInfo(t, b) notify(t, b, "info", 3) end
@@ -636,7 +672,7 @@ loginStatus.Font = Enum.Font.Gotham; loginStatus.Parent = loginCard
 -- Version footer
 local loginFooter = Instance.new("TextLabel")
 loginFooter.Size = UDim2.new(1, 0, 0, 14); loginFooter.Position = UDim2.new(0, 0, 1, -24)
-loginFooter.BackgroundTransparency = 1; loginFooter.Text = "v3.1 • Made by Origin"
+loginFooter.BackgroundTransparency = 1; loginFooter.Text = "v3.2 • Made by Origin"
 loginFooter.TextColor3 = T.TextMuted; loginFooter.TextSize = 10
 loginFooter.Font = Enum.Font.Gotham; loginFooter.Parent = loginCard
 
@@ -674,7 +710,9 @@ local function doLogin()
                 mainHub.BackgroundTransparency = 1
                 tw(mainHub, {Size = UDim2.new(0, 460, 0, 560), Position = UDim2.new(0.5, -230, 0.5, -280), BackgroundTransparency = 0.2}, 0.65, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
                 task.delay(0.65, function()
-                    notify("◈  Origin's SOFB Hub", "v3.1 loaded! Welcome, "..player.Name.." ["..(role:upper()).."]", "success", 5)
+                    -- Refresh subscription card now that currentKeyPlan is set
+                    if _G.refreshSubCard then _G.refreshSubCard() end
+                    notify("◈  Origin's SOFB Hub", "v3.2 loaded! Welcome, "..player.Name.." ["..(role:upper()).."]", "success", 5)
                     
                     task.delay(1.5, function()
                         notify("⚠️ Early Beta Notice", "The hub is a very new indie project! More features are coming, but expect bugs and unoptimized features as it's still in early beta.", "warning", 8)
@@ -757,6 +795,8 @@ sh.ImageColor3 = Color3.new(0,0,0); sh.ImageTransparency = 0.4
 sh.ScaleType = Enum.ScaleType.Slice; sh.SliceCenter = Rect.new(49,49,450,450)
 sh.ZIndex = -1; sh.Parent = mainHub
 
+-- (Removed footer version pill from here)
+
 -- ┌──── TOP BAR ────┐
 local topBar = Instance.new("Frame")
 topBar.Name = "TopBar"; topBar.Size = UDim2.new(1, 0, 0, 44)
@@ -797,10 +837,14 @@ titleLabel.TextColor3 = T.Text; titleLabel.TextSize = 15; titleLabel.Font = Enum
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left; titleLabel.Parent = topBar
 
 local verBadge = Instance.new("TextLabel")
-verBadge.Size = UDim2.new(0, 38, 0, 17); verBadge.Position = UDim2.new(0, 202, 0.5, -8)
-verBadge.BackgroundColor3 = T.Accent; verBadge.BackgroundTransparency = 0.82
-verBadge.Text = "v3.1"; verBadge.TextColor3 = T.AccentGlow; verBadge.TextSize = 10
+verBadge.Size = UDim2.new(0, 36, 0, 16); verBadge.Position = UDim2.new(0, 185, 0.5, -8)
+verBadge.BackgroundColor3 = T.Accent; verBadge.BackgroundTransparency = 0.85
+verBadge.Text = "v3.2"; verBadge.TextColor3 = T.AccentGlow; verBadge.TextSize = 10
 verBadge.Font = Enum.Font.GothamBold; verBadge.Parent = topBar; corner(verBadge, 4)
+local vbGrad = Instance.new("UIGradient")
+vbGrad.Rotation = 90
+vbGrad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(0.4,0.4,0.4))})
+vbGrad.Parent = verBadge
 
 -- Top bar buttons
 local function barBtn(txt, offX)
@@ -813,35 +857,8 @@ local function barBtn(txt, offX)
     b.MouseLeave:Connect(function() tw(b, {TextColor3 = T.TextDim, BackgroundTransparency = 1}, 0.12) end)
     return b
 end
-local closeBtn = barBtn("✕", -38)
+local closeBtn = barBtn("X", -38)
 local minBtn = barBtn("─", -72)
-local logoutBtn = barBtn("🚪", -106)
-logoutBtn.MouseButton1Click:Connect(function()
-    saveSession("")
-    isAuthenticated = false; isOwner = false; isAdmin = false
-    
-    tw(mainHub, {BackgroundTransparency = 1, Size = UDim2.new(0, 500, 0, 600), Position = UDim2.new(0.5, -250, 0.5, -300)}, 0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-    task.delay(0.4, function()
-        mainHub.Visible = false
-        if adminPanel and adminPanel.Visible then
-            adminPanel.Visible = false
-        end
-        loginFrame.Visible = true
-        loginCard.Size = UDim2.new(0, 360, 0, 340)
-        loginCard.Position = UDim2.new(0.5, -180, 0.5, -170)
-        loginCard.BackgroundTransparency = 0
-        loginFrame.BackgroundTransparency = 0
-        
-        local loginCardStroke = loginCard:FindFirstChildOfClass("UIStroke")
-        if loginCardStroke then loginCardStroke.Transparency = 0 end
-        
-        keyInput.Text = ""
-        loginStatus.Text = ""
-        -- Intro animation
-        loginCard.Size = UDim2.new(0, 340, 0, 320)
-        tw(loginCard, {Size = UDim2.new(0, 360, 0, 340)}, 0.45, Enum.EasingStyle.Quart)
-    end)
-end)
 
 -- (FPS label removed per user request)
 
@@ -1149,44 +1166,198 @@ local function makeLabel(parent, text, color, order)
     return lbl
 end
 
+local function makeDropdown(parent, label, options, defaultIdx, order, cb)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 36); row.BackgroundTransparency = 1
+    row.LayoutOrder = order; row.ZIndex = 10; row.Parent = parent
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(0, 110, 1, 0); lbl.BackgroundTransparency = 1; lbl.Text = label
+    lbl.TextColor3 = T.Text; lbl.TextSize = 13; lbl.Font = Enum.Font.Gotham
+    lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.ZIndex = 10; lbl.Parent = row
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -120, 0, 30); btn.Position = UDim2.new(0, 120, 0.5, -15)
+    btn.BackgroundColor3 = T.Input; btn.TextColor3 = T.Accent; btn.TextSize = 13
+    btn.Font = Enum.Font.GothamBold; btn.BorderSizePixel = 0; btn.Text = ""
+    btn.AutoButtonColor = false; btn.ZIndex = 11; btn.Parent = row; corner(btn, 6); stroke(btn, T.BorderLight, 1)
+
+    local val = Instance.new("TextLabel")
+    val.Size = UDim2.new(1, -24, 1, 0); val.Position = UDim2.new(0, 10, 0, 0)
+    val.BackgroundTransparency = 1; val.Text = options[defaultIdx] or "Select..."
+    val.TextColor3 = T.Text; val.TextSize = 12; val.Font = Enum.Font.GothamBold
+    val.TextXAlignment = Enum.TextXAlignment.Left; val.ZIndex = 12; val.Parent = btn
+
+    local dropIcon = Instance.new("TextLabel")
+    dropIcon.Size = UDim2.new(0, 24, 1, 0); dropIcon.Position = UDim2.new(1, -24, 0, 0)
+    dropIcon.BackgroundTransparency = 1; dropIcon.Text = "▼"
+    dropIcon.TextColor3 = T.TextDim; dropIcon.TextSize = 12; dropIcon.Font = Enum.Font.GothamBold; dropIcon.ZIndex = 12; dropIcon.Parent = btn
+
+    local list = Instance.new("ScrollingFrame")
+    list.Position = UDim2.new(0, 0, 1, 4); list.BackgroundColor3 = T.SurfaceHover
+    list.BorderSizePixel = 0; list.ZIndex = 20; list.Visible = false
+    list.ScrollBarThickness = 3; list.ScrollBarImageColor3 = T.Accent
+    list.Parent = btn; corner(list, 6); stroke(list, T.BorderLight, 1)
+
+    local lay = Instance.new("UIListLayout")
+    lay.SortOrder = Enum.SortOrder.LayoutOrder; lay.Parent = list
+
+    local isOpen = false
+    
+    local function updateZ(open)
+        row.ZIndex = open and 100 or 10
+        btn.ZIndex = open and 100 or 11
+        if parent:IsA("Frame") then parent.ZIndex = open and 100 or 1 end
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        isOpen = not isOpen
+        list.Visible = isOpen
+        dropIcon.Text = isOpen and "▲" or "▼"
+        updateZ(isOpen)
+    end)
+
+    local function populate(opts)
+        for _, c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+        for i, opt in ipairs(opts) do
+            local oBtn = Instance.new("TextButton")
+            oBtn.Size = UDim2.new(1, 0, 0, 26); oBtn.BackgroundColor3 = T.SurfaceHover
+            oBtn.BackgroundTransparency = 1; oBtn.Text = "  " .. opt
+            oBtn.TextColor3 = T.TextDim; oBtn.TextSize = 12; oBtn.Font = Enum.Font.Gotham
+            oBtn.TextXAlignment = Enum.TextXAlignment.Left; oBtn.BorderSizePixel = 0
+            oBtn.LayoutOrder = i; oBtn.ZIndex = 21; oBtn.Parent = list
+            oBtn.MouseEnter:Connect(function() tw(oBtn, {BackgroundTransparency = 0, TextColor3 = T.Text}, 0.1) end)
+            oBtn.MouseLeave:Connect(function() tw(oBtn, {BackgroundTransparency = 1, TextColor3 = T.TextDim}, 0.1) end)
+            oBtn.MouseButton1Click:Connect(function()
+                val.Text = opt
+                isOpen = false
+                list.Visible = false
+                dropIcon.Text = "▼"
+                updateZ(false)
+                if cb then cb(i, opt) end
+            end)
+        end
+        list.CanvasSize = UDim2.new(0, 0, 0, #opts * 26 + 2)
+        list.Size = UDim2.new(1, 0, 0, math.min(#opts * 26 + 4, 160))
+    end
+    populate(options)
+    
+    return row, populate
+end
+
 -- ════════════════════════════════════════════
 --  RARITY CHECK FACTORY
 -- ════════════════════════════════════════════
 local function makeRarityCheck(parent, rarityName, order)
     local color = T.Rarity[rarityName]
     local default = Settings.Rarities[rarityName]
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 26); row.BackgroundTransparency = 1
-    row.LayoutOrder = order; row.Parent = parent
 
+    -- ── Outer row (carries the gradient bg) ──────────────────────────
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 28)
+    row.BackgroundColor3 = color
+    row.BackgroundTransparency = 0.97   -- extremely subtle tint, visible on hover
+    row.BorderSizePixel = 0
+    row.LayoutOrder = order; row.Parent = parent
+    corner(row, 5)
+
+    -- Horizontal gradient: transparent → rarity glow → transparent
+    local rowGrad = Instance.new("UIGradient")
+    rowGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.new(0,0,0)),
+        ColorSequenceKeypoint.new(0.18, color),
+        ColorSequenceKeypoint.new(0.55, color),
+        ColorSequenceKeypoint.new(1,   Color3.new(0,0,0)),
+    })
+    rowGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0,   1),
+        NumberSequenceKeypoint.new(0.18, 0.93),
+        NumberSequenceKeypoint.new(0.55, 0.93),
+        NumberSequenceKeypoint.new(1,   1),
+    })
+    rowGrad.Rotation = 0
+    rowGrad.Parent = row
+
+    -- Hover: brighten the row glow
+    row.MouseEnter:Connect(function()
+        tw(row, {BackgroundTransparency = 0.82}, 0.18, Enum.EasingStyle.Quint)
+    end)
+    row.MouseLeave:Connect(function()
+        tw(row, {BackgroundTransparency = 0.97}, 0.25, Enum.EasingStyle.Quint)
+    end)
+
+    -- ── Checkbox ─────────────────────────────────────────────────────
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 20, 0, 20); btn.Position = UDim2.new(0, 0, 0.5, -10)
+    btn.Size = UDim2.new(0, 20, 0, 20); btn.Position = UDim2.new(0, 4, 0.5, -10)
     btn.BackgroundColor3 = default and color or T.Off; btn.Text = default and "✓" or ""
     btn.TextColor3 = Color3.new(1,1,1); btn.TextSize = 12; btn.Font = Enum.Font.GothamBold
     btn.BorderSizePixel = 0; btn.AutoButtonColor = false; btn.Parent = row; corner(btn, 5)
+    -- Dark-bottom-to-light-top gradient on the checkbox
+    local btnGrad = Instance.new("UIGradient")
+    btnGrad.Rotation = 90
+    btnGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(1,   Color3.new(0.35, 0.35, 0.35)),
+    })
+    btnGrad.Parent = btn
 
+    -- ── Glowing stripe ───────────────────────────────────────────────
     local stripe = Instance.new("Frame")
-    stripe.Size = UDim2.new(0, 3, 0, 16); stripe.Position = UDim2.new(0, 28, 0.5, -8)
+    stripe.Size = UDim2.new(0, 3, 0, 18); stripe.Position = UDim2.new(0, 32, 0.5, -9)
     stripe.BackgroundColor3 = color; stripe.BorderSizePixel = 0; stripe.Parent = row; corner(stripe, 2)
 
+    -- Shimmer gradient on the stripe (vertical, light→color→light cycle)
+    local stripeGrad = Instance.new("UIGradient")
+    stripeGrad.Rotation = 90
+    stripeGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   color),
+        ColorSequenceKeypoint.new(0.5, Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(1,   color),
+    })
+    stripeGrad.Parent = stripe
+    -- Animate shimmer perpetually
+    task.spawn(function()
+        while stripe and stripe.Parent do
+            stripeGrad.Offset = Vector2.new(0, -1)
+            tw(stripeGrad, {Offset = Vector2.new(0, 1)}, 1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+            task.wait(1.8)
+        end
+    end)
+
+    -- ── Rarity name label ─────────────────────────────────────────────
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(0, 80, 1, 0); lbl.Position = UDim2.new(0, 36, 0, 0)
+    lbl.Size = UDim2.new(0, 80, 1, 0); lbl.Position = UDim2.new(0, 40, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = rarityName; lbl.TextColor3 = color
     lbl.TextSize = 12; lbl.Font = Enum.Font.GothamBold
     lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.Parent = row
 
+    -- ── Tier chip ────────────────────────────────────────────────────
     local tier = Instance.new("TextLabel")
-    tier.Size = UDim2.new(0, 80, 1, 0); tier.Position = UDim2.new(0, 120, 0, 0)
+    tier.Size = UDim2.new(0, 82, 1, 0); tier.Position = UDim2.new(0, 122, 0, 0)
     tier.BackgroundTransparency = 1; tier.Text = T.RarityTier[rarityName] or ""
     tier.TextColor3 = T.TextMuted; tier.TextSize = 10; tier.Font = Enum.Font.Gotham
     tier.TextXAlignment = Enum.TextXAlignment.Left; tier.Parent = row
 
+    -- ── Count badge (gradient-tinted) ────────────────────────────────
     local countLbl = Instance.new("TextLabel")
     countLbl.Name = "Count"; countLbl.Size = UDim2.new(0, 30, 0, 16)
     countLbl.Position = UDim2.new(1, -34, 0.5, -8)
     countLbl.BackgroundColor3 = color; countLbl.BackgroundTransparency = 0.88
     countLbl.Text = "0"; countLbl.TextColor3 = color; countLbl.TextSize = 10
     countLbl.Font = Enum.Font.GothamBold; countLbl.Parent = row; corner(countLbl, 4)
+
+    -- Gradient overlay on the count badge
+    local badgeGrad = Instance.new("UIGradient")
+    badgeGrad.Rotation = 135
+    badgeGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(1,   color),
+    })
+    badgeGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.6),
+        NumberSequenceKeypoint.new(1, 0),
+    })
+    badgeGrad.Parent = countLbl
 
     local state = default
     btn.MouseButton1Click:Connect(function()
@@ -1206,7 +1377,86 @@ local pg = tabPages["combat"]
 local secInfo = makeSection(pg, "PLAYER INFO", 1, "👤")
 local infoName = makeLabel(secInfo, "👤  "..player.Name.."  (ID: "..player.UserId..")", T.Text, 1)
 local infoSession = makeLabel(secInfo, "⏱  Session: 0s", T.TextDim, 2)
-local infoStats = makeLabel(secInfo, "📊  Rares: 0  │  TPs: 0", T.TextDim, 3)
+local infoStats = makeLabel(secInfo, "📊  Active Targets: 0  │  TPs: 0", T.TextDim, 3)
+
+-- ── Subscription card (scoped to free registers) ──────────────────────────
+do
+    local subCard = Instance.new("Frame")
+    subCard.Size = UDim2.new(1, 0, 0, 52); subCard.BackgroundColor3 = T.Surface
+    subCard.BorderSizePixel = 0; subCard.LayoutOrder = 4; subCard.Parent = secInfo
+    corner(subCard, 8)
+    local subCardStroke = stroke(subCard, T.Border, 1)
+
+    local subCardGrad = Instance.new("UIGradient")
+    subCardGrad.Rotation = 0
+    subCardGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, T.Accent),
+        ColorSequenceKeypoint.new(1, Color3.new(0,0,0)),
+    })
+    subCardGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.88),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    subCardGrad.Parent = subCard
+
+    local subIconBg = Instance.new("Frame")
+    subIconBg.Size = UDim2.new(0, 36, 0, 36); subIconBg.Position = UDim2.new(0, 8, 0.5, -18)
+    subIconBg.BackgroundColor3 = T.Accent; subIconBg.BackgroundTransparency = 0.82
+    subIconBg.BorderSizePixel = 0; subIconBg.Parent = subCard; corner(subIconBg, 18)
+    local subIconLbl = Instance.new("TextLabel")
+    subIconLbl.Size = UDim2.new(1,0,1,0); subIconLbl.BackgroundTransparency = 1
+    subIconLbl.Text = "🔑"; subIconLbl.TextSize = 18; subIconLbl.Font = Enum.Font.GothamBold
+    subIconLbl.Parent = subIconBg
+
+    local subPlanLbl = Instance.new("TextLabel")
+    subPlanLbl.Name = "SubPlan"
+    subPlanLbl.Size = UDim2.new(1, -120, 0, 18); subPlanLbl.Position = UDim2.new(0, 52, 0, 7)
+    subPlanLbl.BackgroundTransparency = 1; subPlanLbl.Text = "Plan: —"
+    subPlanLbl.TextColor3 = T.AccentGlow; subPlanLbl.TextSize = 13; subPlanLbl.Font = Enum.Font.GothamBold
+    subPlanLbl.TextXAlignment = Enum.TextXAlignment.Left; subPlanLbl.Parent = subCard
+
+    local subExpiryLbl = Instance.new("TextLabel")
+    subExpiryLbl.Name = "SubExpiry"
+    subExpiryLbl.Size = UDim2.new(1, -120, 0, 14); subExpiryLbl.Position = UDim2.new(0, 52, 0, 28)
+    subExpiryLbl.BackgroundTransparency = 1; subExpiryLbl.Text = "Expires: —"
+    subExpiryLbl.TextColor3 = T.TextDim; subExpiryLbl.TextSize = 11; subExpiryLbl.Font = Enum.Font.Gotham
+    subExpiryLbl.TextXAlignment = Enum.TextXAlignment.Left; subExpiryLbl.Parent = subCard
+
+    local subBadge = Instance.new("TextLabel")
+    subBadge.Name = "SubBadge"
+    subBadge.Size = UDim2.new(0, 52, 0, 20); subBadge.Position = UDim2.new(1, -58, 0.5, -10)
+    subBadge.BackgroundColor3 = T.On; subBadge.BackgroundTransparency = 0.75
+    subBadge.Text = "ACTIVE"; subBadge.TextColor3 = T.On; subBadge.TextSize = 9
+    subBadge.Font = Enum.Font.GothamBold; subBadge.Parent = subCard; corner(subBadge, 4)
+    local subBadgeGrad = Instance.new("UIGradient")
+    subBadgeGrad.Rotation = 90
+    subBadgeGrad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(0.3,0.3,0.3))})
+    subBadgeGrad.Parent = subBadge
+
+    _G.refreshSubCard = function()
+        local planInfo = getPlanInfo(currentKeyPlan or "STARTER")
+        local roleLabel = isOwner and "Owner" or (isAdmin and "Admin" or planInfo.label)
+        local roleIcon  = isOwner and "👑" or (isAdmin and "🛡️" or planInfo.icon)
+        subIconLbl.Text = roleIcon
+        subIconBg.BackgroundColor3 = planInfo.color
+        subPlanLbl.Text = roleIcon .. "  " .. roleLabel .. " Plan"
+        subPlanLbl.TextColor3 = planInfo.color
+        subCardStroke.Color = planInfo.color
+        subCardGrad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, planInfo.color),
+            ColorSequenceKeypoint.new(1, Color3.new(0,0,0)),
+        })
+        if isOwner or isAdmin or currentKeyExpires == nil then
+            subExpiryLbl.Text = "⚡  Unlimited access"
+            subExpiryLbl.TextColor3 = T.On
+            subBadge.Text = "LIFETIME"; subBadge.BackgroundColor3 = T.On; subBadge.TextColor3 = T.On
+        else
+            subExpiryLbl.Text = "📅  Expires: " .. (currentKeyExpires or "?")
+            subExpiryLbl.TextColor3 = T.TextDim
+            subBadge.Text = "ACTIVE"; subBadge.BackgroundColor3 = T.On; subBadge.TextColor3 = T.On
+        end
+    end
+end  -- end subscription card scope
 
 local secMove = makeSection(pg, "MOVEMENT", 2, "🏃")
 makeToggle(secMove, "Speed Lock", Settings.SpeedLock, 1, function(v)
@@ -1330,7 +1580,7 @@ local function hotkeyRow(parent, key, desc, order)
     d.Parent = row
 end
 
-hotkeyRow(secTP, "G", "Teleport to Zone 12", 1)
+hotkeyRow(secTP, "G", "Teleport to Best Zone", 1)
 hotkeyRow(secTP, "B", "Teleport to Plot Base", 2)
 hotkeyRow(secTP, "R⇧", "Toggle Hub (RightShift)", 3)
 hotkeyRow(secTP, "N", "Test Notification", 4)
@@ -1339,22 +1589,85 @@ makeSeparator(secTP, 5)
 -- Forward declare teleportTo
 local teleportTo
 
-makeButton(secTP, "⚡  Teleport to Zone 12", T.Accent, 6, function()
-    local z = workspace:FindFirstChild("Zones")
-    if z then
-        local z12 = z:FindFirstChild("12")
-        if z12 and teleportTo(z12) then
-            addLog("TP → Zone 12"); notifySuccess("Teleported", "Arrived at Zone 12")
+_G.TargetZone = nil
+
+local function getBestZone()
+    local bestZ
+    local highestLuck = -1
+    local highestNum = -1
+    local parent = workspace:FindFirstChild("Zones")
+    if parent then
+        for _, z in ipairs(parent:GetChildren()) do
+            local num = tonumber(z.Name)
+            if num and num >= 1 and num <= 14 then
+                local luckVal = z:FindFirstChild("Luck")
+                local luck = luckVal and luckVal:IsA("ValueBase") and tonumber(luckVal.Value) or 0
+                if luck == 0 then
+                    if num == 14 then luck = 3000
+                    elseif num == 13 then luck = 2500 end
+                end
+                
+                if luck > highestLuck then
+                    highestLuck = luck
+                    highestNum = num
+                    bestZ = z
+                elseif luck == highestLuck and num > highestNum then
+                    highestNum = num
+                    bestZ = z
+                end
+            end
         end
     end
-end)
-makeButton(secTP, "🏠  Teleport to Plot Base", T.AccentGlow, 7, function()
-    pcall(function()
-        local base = workspace.Plots.Plot2.Base; local ch = base:GetChildren()
-        if #ch >= 4 and teleportTo(ch[4]) then
-            addLog("TP → Plot Base"); notifySuccess("Teleported", "Arrived at Plot Base")
+    return bestZ
+end
+
+local function getAvailableZones()
+    local zones = {}
+    local parent = workspace:FindFirstChild("Zones")
+    if parent then
+        for _, z in ipairs(parent:GetChildren()) do
+            local num = tonumber(z.Name)
+            if num and num >= 1 and num <= 14 then
+                local suffix = ""
+                local luckVal = z:FindFirstChild("Luck")
+                if luckVal and luckVal:IsA("ValueBase") then
+                    suffix = " ("..tostring(luckVal.Value).." Luck)"
+                else
+                    if num == 13 then suffix = " (2.5k Luck)"
+                    elseif num == 14 then suffix = " (3k Luck)" end
+                end
+                table.insert(zones, {inst = z, num = num, name = "Zone " .. z.Name .. suffix})
+            end
         end
-    end)
+    end
+    table.sort(zones, function(a, b) return a.num < b.num end)
+    local nameCounts = {}
+    for _, z in ipairs(zones) do
+        nameCounts[z.name] = (nameCounts[z.name] or 0) + 1
+        if nameCounts[z.name] > 1 then
+            z.name = z.name .. " [Alt " .. nameCounts[z.name] .. "]"
+        end
+    end
+    local opts = {}
+    for _, z in ipairs(zones) do table.insert(opts, z.name) end
+    if #opts == 0 then opts = {"No Zones Found"} end
+    return zones, opts
+end
+
+local availableZoneInstances, zoneOpts = getAvailableZones()
+_G.TargetZone = getBestZone()
+
+local defaultIndex = 1
+if _G.TargetZone then
+    for i, z in ipairs(availableZoneInstances) do
+        if z.inst == _G.TargetZone then defaultIndex = i; break end
+    end
+end
+
+local dropRow, refreshDrop = makeDropdown(secTP, "Zone Picker", zoneOpts, defaultIndex, 6, function(idx, opt)
+    if availableZoneInstances[idx] then
+        _G.TargetZone = availableZoneInstances[idx].inst
+    end
 end)
 
 -- ════════════════════════════════════════════
@@ -1365,7 +1678,7 @@ pg = tabPages["binds"]
 local secBinds = makeSection(pg, "CUSTOM KEYBINDS", 1, "⌨")
 makeLabel(secBinds, "Click a button then press any key to rebind.", T.TextDim, 1)
 makeSeparator(secBinds, 2)
-makeBindRow(secBinds, "Teleport to Zone 12", "Zone12", 3)
+makeBindRow(secBinds, "Teleport to Best Zone", "BestZone", 3)
 makeBindRow(secBinds, "Teleport to Plot Base", "PlotBase", 4)
 makeBindRow(secBinds, "Toggle UI Visibility", "ToggleHub", 5)
 makeBindRow(secBinds, "Toggle Admin Panel", "AdminPanel", 6)
@@ -1437,7 +1750,7 @@ end
 
 -- Credits
 local secCredit = makeSection(pg, "ABOUT", 3, "ℹ")
-makeLabel(secCredit, "Made by Origin · SOFB Hub v3.0", T.TextDim, 1)
+makeLabel(secCredit, "Made by Origin · SOFB Hub v3.2", T.TextDim, 1)
 makeLabel(secCredit, "Press RightShift to toggle UI", T.TextMuted, 2)
 
 -- ════════════════════════════════════════════
@@ -1583,6 +1896,54 @@ copyKeyBtn.MouseButton1Click:Connect(function()
         else notifyWarn("Unavailable", "Clipboard not supported") end
     end
 end)
+
+-- ── Plan selector (scoped to free registers) ────────────────────────────
+do
+    local planNames = {"Starter (7d)","Monthly (30d)","Pro (90d)","Elite (180d)","Lifetime"}
+    _G.planIds = {"STARTER","MONTHLY","PRO","ELITE","LIFETIME"}
+    _G.selectedPlanIdx = 2  -- default Monthly
+
+    local planRow = Instance.new("Frame")
+    planRow.Size = UDim2.new(1, 0, 0, 30); planRow.BackgroundTransparency = 1
+    planRow.LayoutOrder = 0; planRow.Parent = secGenerate
+    local planLbl2 = Instance.new("TextLabel")
+    planLbl2.Size = UDim2.new(0, 70, 1, 0); planLbl2.BackgroundTransparency = 1
+    planLbl2.Text = "Plan:"; planLbl2.TextColor3 = T.TextDim; planLbl2.TextSize = 12
+    planLbl2.Font = Enum.Font.GothamBold; planLbl2.TextXAlignment = Enum.TextXAlignment.Left
+    planLbl2.Parent = planRow
+
+    local planBtnRow = Instance.new("Frame")
+    planBtnRow.Size = UDim2.new(1, -78, 1, 0); planBtnRow.Position = UDim2.new(0, 74, 0, 0)
+    planBtnRow.BackgroundTransparency = 1; planBtnRow.Parent = planRow
+    local planBtnLayout2 = Instance.new("UIListLayout")
+    planBtnLayout2.FillDirection = Enum.FillDirection.Horizontal
+    planBtnLayout2.SortOrder = Enum.SortOrder.LayoutOrder
+    planBtnLayout2.Padding = UDim.new(0, 3); planBtnLayout2.Parent = planBtnRow
+
+    local planBtns = {}
+    for pi, pname in ipairs(planNames) do
+        local pbtn = Instance.new("TextButton")
+        pbtn.Size = UDim2.new(1/#planNames, -3, 1, 0)
+        pbtn.BackgroundColor3 = pi == _G.selectedPlanIdx and T.Accent or T.Input
+        pbtn.BackgroundTransparency = pi == _G.selectedPlanIdx and 0.5 or 0.7
+        pbtn.Text = PLANS[pi].icon; pbtn.TextSize = 13; pbtn.Font = Enum.Font.GothamBold
+        pbtn.TextColor3 = pi == _G.selectedPlanIdx and T.AccentGlow or T.TextDim
+        pbtn.BorderSizePixel = 0; pbtn.AutoButtonColor = false
+        pbtn.LayoutOrder = pi; pbtn.Parent = planBtnRow; corner(pbtn, 5)
+        local pbtnGrad = Instance.new("UIGradient")
+        pbtnGrad.Rotation = 90
+        pbtnGrad.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),ColorSequenceKeypoint.new(1,Color3.new(0.3,0.3,0.3))})
+        pbtnGrad.Parent = pbtn
+        pbtn.MouseButton1Click:Connect(function()
+            _G.selectedPlanIdx = pi
+            for j, b in ipairs(planBtns) do
+                tw(b, {BackgroundColor3 = j==pi and T.Accent or T.Input, BackgroundTransparency = j==pi and 0.5 or 0.7,
+                       TextColor3 = j==pi and T.AccentGlow or T.TextDim}, 0.15)
+            end
+        end)
+        table.insert(planBtns, pbtn)
+    end
+end  -- end plan selector scope
 
 local genBtnRow = Instance.new("Frame")
 genBtnRow.Size = UDim2.new(1, 0, 0, 36); genBtnRow.BackgroundTransparency = 1
@@ -1915,14 +2276,25 @@ genBtn.MouseButton1Click:Connect(function()
     tw(genBtn, {BackgroundTransparency = 0.5}, 0.05)
     task.delay(0.1, function() tw(genBtn, {BackgroundTransparency = 0.15}, 0.2) end)
     local newKey = generateKey()
+    local chosenPlanId = (_G.planIds and _G.planIds[_G.selectedPlanIdx]) or "MONTHLY"
+    local chosenPlan   = PLAN_MAP[chosenPlanId]
+    local expiryStr    = calcExpiry(chosenPlan and chosenPlan.days or nil)
     validKeys = loadKeys()
-    table.insert(validKeys, {key = newKey, active = true, created = os.date("%Y-%m-%d %H:%M"), createdBy = player.Name})
+    table.insert(validKeys, {
+        key       = newKey,
+        active    = true,
+        plan      = chosenPlanId,
+        expires   = expiryStr,
+        created   = os.date("%Y-%m-%d %H:%M"),
+        createdBy = player.Name,
+    })
     saveKeys(validKeys)
     keyOutputBox.Text = newKey
     refreshKeyList()
-    addLog("Generated key: "..newKey)
-    notifySuccess("Key Generated", newKey)
-    sendWebhook("🔑 Key Generated", "**By:** "..player.Name.."\n**Key:** ||"..newKey.."||", 3066993, {
+    local planLabel = chosenPlan and (chosenPlan.icon.." "..chosenPlan.label) or "?"
+    addLog("Generated key ["..planLabel.."] : "..newKey)
+    notifySuccess("Key Generated", planLabel.."\n"..newKey)
+    sendWebhook("🔑 Key Generated", "**By:** "..player.Name.."\n**Plan:** "..planLabel.."\n**Expires:** "..(expiryStr or "Never").."\n**Key:** ||"..newKey.."||", 3066993, {
         {name = "Total Keys", value = tostring(#validKeys), inline = true},
     })
 end)
@@ -1951,6 +2323,12 @@ local function toggleAdminPanel()
         tw(adminPanel, {Size = UDim2.new(0, 380, 0, 0), BackgroundTransparency = 1}, 0.25, Enum.EasingStyle.Quart)
         task.delay(0.28, function() adminPanel.Visible = false; adminPanel.Size = UDim2.new(0, 380, 0, 520); adminPanel.BackgroundTransparency = 0 end)
     else
+        local pos = UIS:GetMouseLocation()
+        local vp = workspace.CurrentCamera.ViewportSize
+        local x = math.clamp(pos.X - 190, 0, math.max(0, vp.X - 380))
+        local y = math.clamp(pos.Y - 20, 0, math.max(0, vp.Y - 520))
+        adminPanel.Position = UDim2.new(0, x, 0, y)
+        
         adminPanel.Size = UDim2.new(0, 380, 0, 0)
         adminPanel.BackgroundTransparency = 1
         adminPanel.Visible = true
@@ -2063,11 +2441,13 @@ UIS.InputBegan:Connect(function(input, gp)
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     local kn = input.KeyCode.Name
     
-    if kn == Settings.Binds.Zone12 then
-        local z = workspace:FindFirstChild("Zones")
-        if z then local z12 = z:FindFirstChild("12")
-            if z12 and teleportTo(z12) then addLog("TP → Zone 12"); notifySuccess("Teleported", "Zone 12")
-            else addLog("Zone 12 not found") end
+    if kn == Settings.Binds.BestZone then
+        local target = _G.TargetZone or getBestZone()
+        if target and teleportTo(target) then
+            addLog("TP → " .. target.Name)
+            notifySuccess("Teleported", "Arrived at Target Zone (" .. target.Name .. ")")
+        else
+            addLog("Target Zone not found")
         end
     elseif kn == Settings.Binds.PlotBase then
         pcall(function()
@@ -2076,7 +2456,21 @@ UIS.InputBegan:Connect(function(input, gp)
             else addLog("Plot Base missing") end
         end)
     elseif kn == Settings.Binds.ToggleHub then
-        mainHub.Visible = not mainHub.Visible
+        if mainHub.Visible then
+            tw(mainHub, {Size = UDim2.new(0, 460, 0, 0), BackgroundTransparency = 1}, 0.25, Enum.EasingStyle.Quart)
+            task.delay(0.28, function() mainHub.Visible = false; mainHub.Size = minimized and UDim2.new(0, 460, 0, 46) or fullSize; mainHub.BackgroundTransparency = 0.2 end)
+        else
+            local pos = UIS:GetMouseLocation()
+            local vp = workspace.CurrentCamera.ViewportSize
+            local targetHeight = minimized and 46 or 560
+            local x = math.clamp(pos.X - 230, 0, math.max(0, vp.X - 460))
+            local y = math.clamp(pos.Y - 20, 0, math.max(0, vp.Y - targetHeight))
+            mainHub.Position = UDim2.new(0, x, 0, y)
+            mainHub.Size = UDim2.new(0, 460, 0, 0)
+            mainHub.BackgroundTransparency = 1
+            mainHub.Visible = true
+            tw(mainHub, {Size = UDim2.new(0, 460, 0, targetHeight), BackgroundTransparency = 0.2}, 0.35, Enum.EasingStyle.Back)
+        end
     elseif kn == Settings.Binds.AdminPanel then
         toggleAdminPanel()
     end
@@ -2094,6 +2488,7 @@ local rarityMapping = {
     ["EMERALD"] = "EMERALD", ["RUBY"] = "RUBY", ["RAINBOW"] = "RAINBOW",
     ["VOID"] = "VOID", ["ETHEREAL"] = "ETHEREAL", ["CELESTIAL"] = "CELESTIAL",
     ["SECRET"] = "SECRET", ["ANCIENT"] = "ANCIENT", ["MYTHICAL"] = "MYTHICAL",
+    ["RADIOACTIVE"] = "RADIOACTIVE",
     -- Extra variants
     ["MYTHIC"] = "MYTHICAL", ["MYTHIC+"] = "VOID",
 }
@@ -2158,13 +2553,25 @@ local function updateESP()
                 nameTxt = nLbl and nLbl.Text or "Brainrot"
                 rankTxt = rLbl and rLbl.Text or ""
                 if eLbl and eLbl:IsA("TextLabel") and eLbl.Text ~= "" then
-                    earnTxt = "🪙 " .. eLbl.Text
+                    earnTxt = eLbl.Text
                 end
             end
             
             currentCounts[matchRarity] = (currentCounts[matchRarity] or 0) + 1
             
             local isEnabled = Settings.Rarities[matchRarity]
+            
+            if not _G.NotifiedRareBrainrots then _G.NotifiedRareBrainrots = {} end
+            if not _G.NotifiedRareBrainrots[hitbox] then
+                _G.NotifiedRareBrainrots[hitbox] = true
+                -- Wait 2 seconds before firing the notification so it doesn't overlap the initial loading UI spam if multiple exist
+                local isSuperRare = (matchRarity == "ANCIENT" or matchRarity == "VOID" or matchRarity == "CELESTIAL" or matchRarity == "ETHEREAL" or matchRarity == "MYTHICAL" or matchRarity == "SECRET" or matchRarity == "RADIOACTIVE")
+                if isSuperRare then
+                    task.spawn(function()
+                        notifyRarity(matchRarity, nameTxt)
+                    end)
+                end
+            end
             
             if espHighlights[hitbox] and not isEnabled then
                 -- Rarity was toggled off, clean it up immediately
@@ -2191,49 +2598,57 @@ local function updateESP()
                                 t1.Size = UDim2.new(1,0,0,25)
                                 t1.BackgroundTransparency = 1
                                 t1.Text = rankTxt .. " " .. nameTxt
+                                t1.RichText = true
                                 t1.TextColor3 = Color3.new(1,1,1)
-                                t1.TextStrokeTransparency = 0
+                                t1.TextStrokeTransparency = 1
                                 t1.Font = Enum.Font.GothamBold
                                 t1.TextSize = 14
                                 t1.Parent = bg
+                                local s1 = Instance.new("UIStroke"); s1.Thickness = 1.2; s1.Color = Color3.new(0,0,0); s1.Parent = t1
                                 
                                 local t2 = Instance.new("TextLabel")
                                 t2.Size = UDim2.new(1,0,0,20)
-                                t2.Position = UDim2.new(0,0,0,25)
+                                t2.Position = UDim2.new(0,0,0,20)
                                 t2.BackgroundTransparency = 1
-                                t2.Text = "["..txt.."]"
+                                t2.Text = (txt or "")
+                                t2.RichText = true
                                 t2.TextColor3 = T.Rarity[matchRarity] or T.Accent
-                                t2.TextStrokeTransparency = 0
-                                t2.Font = Enum.Font.Code
-                                t2.TextSize = 13
+                                t2.TextStrokeTransparency = 1
+                                t2.Font = Enum.Font.GothamBold
+                                t2.TextSize = 12
                                 t2.Parent = bg
+                                local s2 = Instance.new("UIStroke"); s2.Thickness = 1.2; s2.Color = Color3.new(0,0,0); s2.Parent = t2
                                 
                                 local t3 = Instance.new("TextLabel")
                                 t3.Size = UDim2.new(1,0,0,20)
-                                t3.Position = UDim2.new(0,0,0,45)
+                                t3.Position = UDim2.new(0,0,0,38)
                                 t3.BackgroundTransparency = 1
                                 t3.Text = earnTxt
-                                t3.TextColor3 = Color3.fromRGB(120, 255, 140)
-                                t3.TextStrokeTransparency = 0
-                                t3.Font = Enum.Font.GothamBold
-                                t3.TextSize = 12
+                                t3.RichText = true
+                                t3.TextColor3 = Color3.fromRGB(150, 255, 170)
+                                t3.TextStrokeTransparency = 1
+                                t3.Font = Enum.Font.GothamMedium
+                                t3.TextSize = 11
                                 t3.Parent = bg
+                                local s3 = Instance.new("UIStroke"); s3.Thickness = 1; s3.Color = Color3.new(0,0,0); s3.Parent = t3
                                 
                                 local tpBtn = Instance.new("TextButton")
-                                tpBtn.Size = UDim2.new(0, 70, 0, 22)
-                                tpBtn.Position = UDim2.new(0.5, -35, 0, 68)
-                                tpBtn.BackgroundColor3 = T.InputFocus
-                                tpBtn.Text = "TELEPORT"
-                                tpBtn.TextColor3 = T.TextDim
+                                tpBtn.Size = UDim2.new(0, 76, 0, 24)
+                                tpBtn.Position = UDim2.new(0.5, -38, 0, 64)
+                                tpBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+                                tpBtn.BackgroundTransparency = 0.2
+                                tpBtn.Text = "⚡ TP"
+                                tpBtn.RichText = true
+                                tpBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
                                 tpBtn.Font = Enum.Font.GothamBold
                                 tpBtn.TextSize = 11
                                 tpBtn.AutoButtonColor = false
                                 tpBtn.Parent = bg
                                 corner(tpBtn, 6)
-                                stroke(tpBtn, T.BorderLight, 1)
+                                stroke(tpBtn, T.Rarity[matchRarity] or T.Accent, 1)
                                 
-                                tpBtn.MouseEnter:Connect(function() tw(tpBtn, {BackgroundColor3 = T.Accent, TextColor3 = Color3.new(1,1,1)}, 0.15) end)
-                                tpBtn.MouseLeave:Connect(function() tw(tpBtn, {BackgroundColor3 = T.InputFocus, TextColor3 = T.TextDim}, 0.15) end)
+                                tpBtn.MouseEnter:Connect(function() tw(tpBtn, {BackgroundColor3 = T.Rarity[matchRarity] or T.Accent, TextColor3 = Color3.new(1,1,1), BackgroundTransparency = 0}, 0.15) end)
+                                tpBtn.MouseLeave:Connect(function() tw(tpBtn, {BackgroundColor3 = Color3.fromRGB(20, 20, 25), TextColor3 = Color3.fromRGB(220, 220, 220), BackgroundTransparency = 0.2}, 0.15) end)
                                 tpBtn.MouseButton1Click:Connect(function()
                                     if typeof(teleportTo) == "function" and teleportTo(hitbox) then
                                         addLog("ESP TP → " .. nameTxt)
@@ -2249,9 +2664,9 @@ local function updateESP()
                                 hl.Name = "SOFBEspHl"
                                 hl.Adornee = hitbox
                                 hl.FillColor = T.Rarity[matchRarity] or T.Accent
-                                hl.FillTransparency = 0.6
-                                hl.OutlineColor = T.Rarity[matchRarity] or T.Accent
-                                hl.OutlineTransparency = 0
+                                hl.FillTransparency = 0.65
+                                hl.OutlineColor = Color3.new(1,1,1)
+                                hl.OutlineTransparency = 0.2
                                 hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                                 hl.Parent = hitbox
                                 cache.hl = hl
@@ -2271,6 +2686,14 @@ local function updateESP()
         end
     end
     
+    if _G.NotifiedRareBrainrots then
+        for hitbox in pairs(_G.NotifiedRareBrainrots) do
+            if not seen[hitbox] then
+                _G.NotifiedRareBrainrots[hitbox] = nil
+            end
+        end
+    end
+    
     -- Update live UI counters in the ESP filters
     local activeTotal = 0
     if _G.rarityCountLabels then
@@ -2278,11 +2701,16 @@ local function updateESP()
             local n = currentCounts[rName] or 0
             activeTotal = activeTotal + n
             if countLbl.Text ~= tostring(n) then
+                local wasLower = tonumber(countLbl.Text) or 0
                 countLbl.Text = tostring(n)
                 task.spawn(function()
-                    tw(countLbl, {BackgroundTransparency = 0.3}, 0.1)
-                    task.wait(0.3)
-                    tw(countLbl, {BackgroundTransparency = 0.88}, 0.3)
+                    -- Pop-in: flash background bright + scale up TextSize
+                    local popSize = n > wasLower and 13 or 11
+                    local flashAlpha = n > wasLower and 0.1 or 0.55
+                    tw(countLbl, {BackgroundTransparency = flashAlpha, TextSize = popSize}, 0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+                    task.wait(0.18)
+                    -- Settle back to normal
+                    tw(countLbl, {BackgroundTransparency = 0.88, TextSize = 10}, 0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
                 end)
             end
         end
@@ -2311,14 +2739,14 @@ task.spawn(function()
 end)
 
 -- Startup
-addLog("Origin's SOFB Hub v3.1 loaded!")
-addLog("[G] Zone 12  [B] Plot  [R⇧] Toggle  [N] Test Notif")
+addLog("Origin's SOFB Hub v3.2 loaded!")
+addLog("[G] Best Zone  [B] Plot  [R⇧] Toggle  [N] Test Notif")
 addLog("Enable Auto-TP to start scanning…")
 
 -- ════════════════════════════════════════════
 --  WHAT'S NEW? OVERLAY  (shows once per version)
 -- ════════════════════════════════════════════
-local WHATS_NEW_VERSION = "3.1"
+local WHATS_NEW_VERSION = "3.2"
 local WHATS_NEW_FILE    = "SOFB_WhatsNew_seen.txt"
 
 local function hasSeenWhatsNew()
@@ -2452,7 +2880,7 @@ _G.showWhatsNew = function(callback)
     wnTitle.Size = UDim2.new(1, -40, 0, 28)
     wnTitle.Position = UDim2.new(0, 20, 0, 90)
     wnTitle.BackgroundTransparency = 1
-    wnTitle.Text = "WHAT'S NEW IN v3.1"
+    wnTitle.Text = "WHAT'S NEW IN v3.2"
     wnTitle.TextColor3 = T.Text
     wnTitle.TextSize = 22
     wnTitle.Font = Enum.Font.GothamBold
@@ -2482,10 +2910,10 @@ _G.showWhatsNew = function(callback)
 
     -- ── Changelog entries ──
     local entries = {
+        { icon = "☢️", color = Color3.fromRGB(50, 255, 50),     title = "RADIOACTIVE Rarity ESP",body = "Added full ESP & filtering support for the new RADIOACTIVE rarity." },
+        { icon = "↕",  color = T.AccentGlow,                   title = "Dynamic Zone Picker", body = "New sleek dropdown in the Teleport tab. Pick any Zone 1-14 (including lucky variants)." },
         { icon = "🔐", color = Color3.fromRGB(255, 215, 0),   title = "SECRET Rarity ESP",   body = "Brainrots of SECRET rarity now appear in the ESP with golden highlighting and billboard labels." },
         { icon = "🏛",  color = Color3.fromRGB(210, 105, 30),  title = "ANCIENT Rarity ESP",  body = "ANCIENT rarity support added — bronze/amber highlight and full filter toggle support." },
-        { icon = "✨", color = T.AccentGlow,                   title = "What's New Screen",   body = "This animated overlay now shows once per version so you never miss an update." },
-        { icon = "🐛", color = T.Success,                      title = "Bug Fixes & Polish",   body = "Misc ESP cleanup fixes and performance improvements to the rarity scan loop." },
     }
 
     local yBase = 162
