@@ -28,9 +28,11 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1487277799046778971/dMkVYU
 -- Recommended: Set up a free Firebase Realtime Database (with public read/write rules)
 -- Paste the URL here (MUST end in .json). If left empty, keys will ONLY save locally to your PC.
 local DATABASE_URL = "https://sofb-7bc89-default-rtdb.europe-west1.firebasedatabase.app/keys.json"
+local ADMIN_DB_URL  = "https://sofb-7bc89-default-rtdb.europe-west1.firebasedatabase.app/admins.json"
 
-local KEY_STORE_NAME = "SOFBHub_Keys_v3"
-local SESSION_STORE = "SOFBHub_Session_v3"
+local KEY_STORE_NAME   = "SOFBHub_Keys_v3"
+local ADMIN_STORE_NAME = "SOFBHub_Admins_v3"
+local SESSION_STORE    = "SOFBHub_Session_v3"
 
 -- ════════════════════════════════════════════
 --  KEY PERSISTENCE (writefile/readfile)
@@ -88,6 +90,30 @@ local function loadKeys()
     end
 end
 
+local function saveAdmins(admins)
+    if ADMIN_DB_URL ~= "" then
+        universalRequest({Url = ADMIN_DB_URL, Method = "PUT", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(admins)})
+    else
+        safeWrite(ADMIN_STORE_NAME .. ".json", HttpService:JSONEncode(admins))
+    end
+end
+
+local function loadAdmins()
+    if ADMIN_DB_URL ~= "" then
+        local res = universalRequest({Url = ADMIN_DB_URL, Method = "GET"})
+        if res and res.Body and res.Body ~= "null" then
+            local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+            if ok and type(data) == "table" then return data end
+        end
+        return {}
+    else
+        local raw = safeRead(ADMIN_STORE_NAME .. ".json")
+        if not raw or raw == "" then return {} end
+        local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+        return ok and type(data) == "table" and data or {}
+    end
+end
+
 local function saveSession(key)
     safeWrite(SESSION_STORE .. ".txt", key)
 end
@@ -121,28 +147,41 @@ end
 -- ════════════════════════════════════════════
 --  KEY VALIDATION
 -- ════════════════════════════════════════════
-local validKeys = loadKeys()
-local isOwner = false
+local validKeys  = loadKeys()
+local validAdmins = loadAdmins()
+local isOwner     = false
+local isAdmin     = false
 local isAuthenticated = false
 
 local function generateKey()
-    -- Use HttpService's native UUID generator to absolutely guarantee uniqueness
     local guid = HttpService:GenerateGUID(false):gsub("-", "")
     return ("SOFB-%s-%s-%s-%s"):format(
-        guid:sub(1, 5),
-        guid:sub(6, 10),
-        guid:sub(11, 15),
-        guid:sub(16, 20)
+        guid:sub(1, 5), guid:sub(6, 10),
+        guid:sub(11, 15), guid:sub(16, 20)
+    ):upper()
+end
+
+local function generateAdminKey()
+    local guid = HttpService:GenerateGUID(false):gsub("-", "")
+    return ("SOFB-ADMIN-%s-%s-%s"):format(
+        guid:sub(1, 5), guid:sub(6, 10), guid:sub(11, 15)
     ):upper()
 end
 
 local function validateKey(input)
     if input == OWNER_KEY then
-        isOwner = true
-        isAuthenticated = true
+        isOwner = true; isAuthenticated = true
         return true, "owner"
     end
-    -- Always reload keys from file to catch keys generated in previous sessions
+    -- Check admin keys first
+    validAdmins = loadAdmins()
+    for _, a in ipairs(validAdmins) do
+        if a.key == input and a.active then
+            isAdmin = true; isAuthenticated = true
+            return true, "admin"
+        end
+    end
+    -- Check regular user keys
     validKeys = loadKeys()
     for _, k in ipairs(validKeys) do
         if k.key == input and k.active then
@@ -597,7 +636,7 @@ loginStatus.Font = Enum.Font.Gotham; loginStatus.Parent = loginCard
 -- Version footer
 local loginFooter = Instance.new("TextLabel")
 loginFooter.Size = UDim2.new(1, 0, 0, 14); loginFooter.Position = UDim2.new(0, 0, 1, -24)
-loginFooter.BackgroundTransparency = 1; loginFooter.Text = "v3.0 • Made by Origin"
+loginFooter.BackgroundTransparency = 1; loginFooter.Text = "v3.1 • Made by Origin"
 loginFooter.TextColor3 = T.TextMuted; loginFooter.TextSize = 10
 loginFooter.Font = Enum.Font.Gotham; loginFooter.Parent = loginCard
 
@@ -625,22 +664,17 @@ local function doLogin()
         -- Zoom pop exit
         task.delay(0.2, function()
             tw(loginCardStroke, {Transparency = 1}, 0.25, Enum.EasingStyle.Quart)
-            tw(loginCard, {BackgroundTransparency = 1, Size = UDim2.new(0, 380, 0, 360), Position = UDim2.new(0.5, -190, 0.5, -180)}, 0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-            for _, v in ipairs(loginCard:GetDescendants()) do
-                if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
-                    pcall(function() tw(v, {TextTransparency = 1, BackgroundTransparency = 1}, 0.2) end)
-                end
-            end
+            tw(loginCard, {BackgroundTransparency = 1, Size = UDim2.new(0, 380, 0, 0), Position = UDim2.new(0.5, -190, 0.5, 0)}, 0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
             tw(loginFrame, {BackgroundTransparency = 1}, 0.5)
-            task.delay(0.42, function()
-                loginFrame.Visible = false
+            
+            local function showHub()
                 mainHub.Visible = true
                 mainHub.Size = UDim2.new(0, 500, 0, 600)
                 mainHub.Position = UDim2.new(0.5, -250, 0.5, -300)
                 mainHub.BackgroundTransparency = 1
                 tw(mainHub, {Size = UDim2.new(0, 460, 0, 560), Position = UDim2.new(0.5, -230, 0.5, -280), BackgroundTransparency = 0.2}, 0.65, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
                 task.delay(0.65, function()
-                    notify("◈  Origin's SOFB Hub", "v3.0 loaded! Welcome, "..player.Name, "success", 5)
+                    notify("◈  Origin's SOFB Hub", "v3.1 loaded! Welcome, "..player.Name.." ["..(role:upper()).."]", "success", 5)
                     
                     task.delay(1.5, function()
                         notify("⚠️ Early Beta Notice", "The hub is a very new indie project! More features are coming, but expect bugs and unoptimized features as it's still in early beta.", "warning", 8)
@@ -648,10 +682,23 @@ local function doLogin()
                     
                     if isOwner then
                         task.delay(2.5, function()
-                            notify("👑  Owner Mode", "Admin panel unlocked — go generate some keys!", "info", 5)
+                            notify("👑  Owner Mode", "Admin panel unlocked — press K!", "info", 5)
+                        end)
+                    elseif isAdmin then
+                        task.delay(2.5, function()
+                            notify("🛡️  Admin Mode", "Admin panel unlocked — press K!", "info", 5)
                         end)
                     end
                 end)
+            end
+
+            task.delay(0.42, function()
+                loginFrame.Visible = false
+                if _G.showWhatsNew then
+                    _G.showWhatsNew(showHub)
+                else
+                    showHub()
+                end
             end)
         end)
     else
@@ -752,7 +799,7 @@ titleLabel.TextXAlignment = Enum.TextXAlignment.Left; titleLabel.Parent = topBar
 local verBadge = Instance.new("TextLabel")
 verBadge.Size = UDim2.new(0, 38, 0, 17); verBadge.Position = UDim2.new(0, 202, 0.5, -8)
 verBadge.BackgroundColor3 = T.Accent; verBadge.BackgroundTransparency = 0.82
-verBadge.Text = "v3.0"; verBadge.TextColor3 = T.AccentGlow; verBadge.TextSize = 10
+verBadge.Text = "v3.1"; verBadge.TextColor3 = T.AccentGlow; verBadge.TextSize = 10
 verBadge.Font = Enum.Font.GothamBold; verBadge.Parent = topBar; corner(verBadge, 4)
 
 -- Top bar buttons
@@ -768,6 +815,33 @@ local function barBtn(txt, offX)
 end
 local closeBtn = barBtn("✕", -38)
 local minBtn = barBtn("─", -72)
+local logoutBtn = barBtn("🚪", -106)
+logoutBtn.MouseButton1Click:Connect(function()
+    saveSession("")
+    isAuthenticated = false; isOwner = false; isAdmin = false
+    
+    tw(mainHub, {BackgroundTransparency = 1, Size = UDim2.new(0, 500, 0, 600), Position = UDim2.new(0.5, -250, 0.5, -300)}, 0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+    task.delay(0.4, function()
+        mainHub.Visible = false
+        if adminPanel and adminPanel.Visible then
+            adminPanel.Visible = false
+        end
+        loginFrame.Visible = true
+        loginCard.Size = UDim2.new(0, 360, 0, 340)
+        loginCard.Position = UDim2.new(0.5, -180, 0.5, -170)
+        loginCard.BackgroundTransparency = 0
+        loginFrame.BackgroundTransparency = 0
+        
+        local loginCardStroke = loginCard:FindFirstChildOfClass("UIStroke")
+        if loginCardStroke then loginCardStroke.Transparency = 0 end
+        
+        keyInput.Text = ""
+        loginStatus.Text = ""
+        -- Intro animation
+        loginCard.Size = UDim2.new(0, 340, 0, 320)
+        tw(loginCard, {Size = UDim2.new(0, 360, 0, 340)}, 0.45, Enum.EasingStyle.Quart)
+    end)
+end)
 
 -- (FPS label removed per user request)
 
@@ -1469,8 +1543,13 @@ local apLayout = Instance.new("UIListLayout")
 apLayout.SortOrder = Enum.SortOrder.LayoutOrder; apLayout.Padding = UDim.new(0, 8)
 apLayout.Parent = apScroll
 
--- Generate section
-local secGenerate = makeSection(apScroll, "GENERATE KEY", 2, "⚡")
+-- ════════════════════════════════════════════
+--  ADMIN PANEL HEADER — owner sees full panel;
+--  admins see a stripped panel (generate user keys only)
+-- ════════════════════════════════════════════
+
+-- Generate section (visible to owner AND admin)
+local secGenerate = makeSection(apScroll, "GENERATE USER KEY", 1, "⚡")
 
 local keyOutputBg = Instance.new("Frame")
 keyOutputBg.Size = UDim2.new(1, 0, 0, 38); keyOutputBg.BackgroundColor3 = T.Input
@@ -1537,8 +1616,8 @@ revokeAllBtn.MouseLeave:Connect(function() tw(revokeAllBtn, {BackgroundTranspare
 revokeAllBtn.MouseButton1Down:Connect(function() tw(revokeAllBtn, {BackgroundTransparency = 0.4, TextSize = 11}, 0.1, Enum.EasingStyle.Quint) end)
 revokeAllBtn.MouseButton1Up:Connect(function() tw(revokeAllBtn, {BackgroundTransparency = 0.6, TextSize = 13}, 0.1, Enum.EasingStyle.Quint) end)
 
--- Key list
-local secKeyList = makeSection(apScroll, "ACTIVE KEYS", 3, "📋")
+-- Key list (owner + admin can see their issued keys)
+local secKeyList = makeSection(apScroll, "ACTIVE USER KEYS", 2, "📋")
 local keyListScroll = Instance.new("ScrollingFrame")
 keyListScroll.Size = UDim2.new(1, 0, 0, 180); keyListScroll.BackgroundColor3 = T.LogBg
 keyListScroll.BorderSizePixel = 0; keyListScroll.ScrollBarThickness = 3
@@ -1610,32 +1689,227 @@ local function refreshKeyList()
 
         local actionBtn = Instance.new("TextButton")
         actionBtn.Size = UDim2.new(0,28,0,28); actionBtn.Position = UDim2.new(1,-34,0.5,-14)
-        if k.active then
-            actionBtn.BackgroundColor3 = T.Danger; actionBtn.BackgroundTransparency = 0.75
-            actionBtn.Text = "✕"; actionBtn.TextColor3 = T.Danger
-        else
-            actionBtn.BackgroundColor3 = T.On; actionBtn.BackgroundTransparency = 0.75
-            actionBtn.Text = "✓"; actionBtn.TextColor3 = T.On
-        end
+        actionBtn.BackgroundColor3 = T.Danger; actionBtn.BackgroundTransparency = 0.75
+        actionBtn.Text = "✕"; actionBtn.TextColor3 = T.Danger
         actionBtn.TextSize = 13; actionBtn.Font = Enum.Font.GothamBold
         actionBtn.BorderSizePixel = 0; actionBtn.AutoButtonColor = false
         actionBtn.Parent = card; corner(actionBtn, 6)
         actionBtn.MouseEnter:Connect(function() tw(actionBtn, {BackgroundTransparency = 0.45}, 0.12) end)
         actionBtn.MouseLeave:Connect(function() tw(actionBtn, {BackgroundTransparency = 0.75}, 0.12) end)
         actionBtn.MouseButton1Click:Connect(function()
-            if k.active then
-                k.active = false; saveKeys(validKeys); refreshKeyList()
-                notifyWarn("Key Revoked", k.key)
-                sendWebhook("🔒 Key Revoked", "**Key:** ||"..k.key.."||", 15158332)
-            else
-                k.active = true; saveKeys(validKeys); refreshKeyList()
-                notifySuccess("Key Re-enabled", k.key)
-                sendWebhook("🔓 Key Re-enabled", "**Key:** ||"..k.key.."||", 3066993)
-            end
+            table.remove(validKeys, i)
+            saveKeys(validKeys); refreshKeyList()
+            notifyWarn("Key Deleted", k.key)
+            sendWebhook("🔒 Key Deleted", "**Key:** ||"..k.key.."||", 15158332)
         end)
     end
 end
 refreshKeyList()
+
+-- ════════════════════════════════════════════
+--  ADMIN KEYS SECTION  (owner only)
+-- ════════════════════════════════════════════
+local secAdminKeys = makeSection(apScroll, "ADMIN KEYS", 3, "🛡️")
+
+-- Output box for generated admin key
+local adminKeyOutputBg = Instance.new("Frame")
+adminKeyOutputBg.Size = UDim2.new(1, 0, 0, 38)
+adminKeyOutputBg.BackgroundColor3 = T.Input
+adminKeyOutputBg.BorderSizePixel = 0; adminKeyOutputBg.LayoutOrder = 1
+adminKeyOutputBg.Parent = secAdminKeys
+corner(adminKeyOutputBg, 8); stroke(adminKeyOutputBg, Color3.fromRGB(180,130,255), 1)
+
+local adminKeyIcon = Instance.new("TextLabel")
+adminKeyIcon.Size = UDim2.new(0, 32, 1, 0); adminKeyIcon.BackgroundTransparency = 1
+adminKeyIcon.Text = "🛡️"; adminKeyIcon.TextSize = 14; adminKeyIcon.Font = Enum.Font.GothamBold
+adminKeyIcon.Parent = adminKeyOutputBg
+
+local adminKeyOutputBox = Instance.new("TextBox")
+adminKeyOutputBox.Size = UDim2.new(1, -72, 1, 0); adminKeyOutputBox.Position = UDim2.new(0, 32, 0, 0)
+adminKeyOutputBox.BackgroundTransparency = 1; adminKeyOutputBox.PlaceholderText = "Click Generate Admin Key →"
+adminKeyOutputBox.PlaceholderColor3 = T.TextMuted; adminKeyOutputBox.Text = ""
+adminKeyOutputBox.TextColor3 = Color3.fromRGB(200,160,255); adminKeyOutputBox.TextSize = 11
+adminKeyOutputBox.Font = Enum.Font.Code; adminKeyOutputBox.ClearTextOnFocus = false
+adminKeyOutputBox.TextEditable = false; adminKeyOutputBox.TextXAlignment = Enum.TextXAlignment.Left
+adminKeyOutputBox.Parent = adminKeyOutputBg
+
+local copyAdminKeyBtn = Instance.new("TextButton")
+copyAdminKeyBtn.Size = UDim2.new(0, 34, 0, 28); copyAdminKeyBtn.Position = UDim2.new(1, -38, 0.5, -14)
+copyAdminKeyBtn.BackgroundColor3 = Color3.fromRGB(80,50,160); copyAdminKeyBtn.BackgroundTransparency = 0.7
+copyAdminKeyBtn.Text = "📋"; copyAdminKeyBtn.TextSize = 14; copyAdminKeyBtn.Font = Enum.Font.GothamBold
+copyAdminKeyBtn.TextColor3 = Color3.fromRGB(200,160,255); copyAdminKeyBtn.BorderSizePixel = 0
+copyAdminKeyBtn.AutoButtonColor = false; copyAdminKeyBtn.Parent = adminKeyOutputBg; corner(copyAdminKeyBtn, 6)
+copyAdminKeyBtn.MouseEnter:Connect(function() tw(copyAdminKeyBtn, {BackgroundTransparency = 0.4}, 0.12) end)
+copyAdminKeyBtn.MouseLeave:Connect(function() tw(copyAdminKeyBtn, {BackgroundTransparency = 0.7}, 0.12) end)
+copyAdminKeyBtn.MouseButton1Click:Connect(function()
+    if adminKeyOutputBox.Text ~= "" then
+        if setclipboard then setclipboard(adminKeyOutputBox.Text); notifySuccess("Copied!", "Admin key copied")
+        else notifyWarn("Unavailable", "Clipboard not supported") end
+    end
+end)
+
+-- Generate admin key button
+local genAdminBtnRow = Instance.new("Frame")
+genAdminBtnRow.Size = UDim2.new(1, 0, 0, 36); genAdminBtnRow.BackgroundTransparency = 1
+genAdminBtnRow.LayoutOrder = 2; genAdminBtnRow.Parent = secAdminKeys
+local genAdminBtnLayout = Instance.new("UIListLayout")
+genAdminBtnLayout.FillDirection = Enum.FillDirection.Horizontal
+genAdminBtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+genAdminBtnLayout.Padding = UDim.new(0, 6); genAdminBtnLayout.Parent = genAdminBtnRow
+
+local genAdminBtn = Instance.new("TextButton")
+genAdminBtn.Size = UDim2.new(0.65, -3, 1, 0)
+genAdminBtn.BackgroundColor3 = Color3.fromRGB(120, 80, 220)
+genAdminBtn.BackgroundTransparency = 0.15; genAdminBtn.Text = "🛡️  Generate Admin Key"
+genAdminBtn.TextColor3 = Color3.new(1,1,1); genAdminBtn.TextSize = 12; genAdminBtn.Font = Enum.Font.GothamBold
+genAdminBtn.BorderSizePixel = 0; genAdminBtn.AutoButtonColor = false; genAdminBtn.LayoutOrder = 1
+genAdminBtn.Parent = genAdminBtnRow; corner(genAdminBtn, 8); applyDarkGradient(genAdminBtn)
+genAdminBtn.MouseEnter:Connect(function() tw(genAdminBtn, {BackgroundTransparency = 0.05, TextSize = 13}, 0.2, Enum.EasingStyle.Quint) end)
+genAdminBtn.MouseLeave:Connect(function() tw(genAdminBtn, {BackgroundTransparency = 0.15, TextSize = 12}, 0.2, Enum.EasingStyle.Quint) end)
+genAdminBtn.MouseButton1Down:Connect(function() tw(genAdminBtn, {BackgroundTransparency = 0.0, TextSize = 11}, 0.1) end)
+genAdminBtn.MouseButton1Up:Connect(function() tw(genAdminBtn, {BackgroundTransparency = 0.05, TextSize = 13}, 0.1) end)
+
+local revokeAllAdminsBtn = Instance.new("TextButton")
+revokeAllAdminsBtn.Size = UDim2.new(0.35, -3, 1, 0); revokeAllAdminsBtn.BackgroundColor3 = T.Danger
+revokeAllAdminsBtn.BackgroundTransparency = 0.8; revokeAllAdminsBtn.Text = "🗑 Revoke All"
+revokeAllAdminsBtn.TextColor3 = T.Danger; revokeAllAdminsBtn.TextSize = 11; revokeAllAdminsBtn.Font = Enum.Font.GothamBold
+revokeAllAdminsBtn.BorderSizePixel = 0; revokeAllAdminsBtn.AutoButtonColor = false; revokeAllAdminsBtn.LayoutOrder = 2
+revokeAllAdminsBtn.Parent = genAdminBtnRow; corner(revokeAllAdminsBtn, 8); stroke(revokeAllAdminsBtn, T.Danger, 1)
+applyDarkGradient(revokeAllAdminsBtn)
+revokeAllAdminsBtn.MouseEnter:Connect(function() tw(revokeAllAdminsBtn, {BackgroundTransparency = 0.6, TextSize = 12}, 0.2, Enum.EasingStyle.Quint) end)
+revokeAllAdminsBtn.MouseLeave:Connect(function() tw(revokeAllAdminsBtn, {BackgroundTransparency = 0.8, TextSize = 11}, 0.2, Enum.EasingStyle.Quint) end)
+revokeAllAdminsBtn.MouseButton1Down:Connect(function() tw(revokeAllAdminsBtn, {BackgroundTransparency = 0.4, TextSize = 10}, 0.1) end)
+revokeAllAdminsBtn.MouseButton1Up:Connect(function() tw(revokeAllAdminsBtn, {BackgroundTransparency = 0.6, TextSize = 12}, 0.1) end)
+
+-- Admin key list scroll
+local secAdminList = makeSection(apScroll, "ACTIVE ADMINS", 4, "👑")
+local adminListScroll = Instance.new("ScrollingFrame")
+adminListScroll.Size = UDim2.new(1, 0, 0, 160); adminListScroll.BackgroundColor3 = T.LogBg
+adminListScroll.BorderSizePixel = 0; adminListScroll.ScrollBarThickness = 3
+adminListScroll.ScrollBarImageColor3 = Color3.fromRGB(150,95,255)
+adminListScroll.CanvasSize = UDim2.new(0,0,0,0)
+adminListScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y; adminListScroll.LayoutOrder = 1
+adminListScroll.Parent = secAdminList; corner(adminListScroll, 8); pad(adminListScroll, 6,6,6,6)
+local alLayout = Instance.new("UIListLayout")
+alLayout.SortOrder = Enum.SortOrder.LayoutOrder; alLayout.Padding = UDim.new(0, 4)
+alLayout.Parent = adminListScroll
+
+local function refreshAdminList()
+    validAdmins = loadAdmins()
+    for _, c in ipairs(adminListScroll:GetChildren()) do
+        if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
+    end
+    if #validAdmins == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 0, 36); empty.BackgroundTransparency = 1
+        empty.Text = "No admins yet — generate one!"
+        empty.TextColor3 = T.TextMuted; empty.TextSize = 11; empty.Font = Enum.Font.Gotham
+        empty.LayoutOrder = 1; empty.Parent = adminListScroll
+        return
+    end
+    for i, a in ipairs(validAdmins) do
+        local card = Instance.new("Frame")
+        card.Name = "Admin_"..i; card.Size = UDim2.new(1, 0, 0, 52)
+        card.BackgroundColor3 = a.active and Color3.fromRGB(18,16,28) or Color3.fromRGB(22,16,16)
+        card.BorderSizePixel = 0; card.LayoutOrder = i; card.Parent = adminListScroll
+        corner(card, 8)
+        stroke(card, a.active and Color3.fromRGB(100,60,200) or Color3.fromRGB(80,40,40), 1)
+
+        -- Purple dot indicator
+        local dot = Instance.new("Frame")
+        dot.Size = UDim2.new(0,8,0,8); dot.Position = UDim2.new(0,10,0,10)
+        dot.BackgroundColor3 = a.active and Color3.fromRGB(150,95,255) or T.Danger
+        dot.BorderSizePixel = 0; dot.Parent = card; corner(dot, 4)
+
+        -- Shield badge
+        local badge = Instance.new("TextLabel")
+        badge.Size = UDim2.new(0, 44, 0, 16); badge.Position = UDim2.new(0, 22, 0, 5)
+        badge.BackgroundColor3 = Color3.fromRGB(80,50,160); badge.BackgroundTransparency = 0.6
+        badge.Text = "🛡️ ADMIN"; badge.TextColor3 = Color3.fromRGB(200,160,255)
+        badge.TextSize = 9; badge.Font = Enum.Font.GothamBold
+        badge.Parent = card; corner(badge, 4)
+
+        local keyLbl = Instance.new("TextLabel")
+        keyLbl.Size = UDim2.new(1,-82,0,14); keyLbl.Position = UDim2.new(0,24,0,22)
+        keyLbl.BackgroundTransparency = 1; keyLbl.Text = a.key
+        keyLbl.TextColor3 = a.active and Color3.fromRGB(200,160,255) or T.TextMuted; keyLbl.TextSize = 10
+        keyLbl.Font = Enum.Font.Code; keyLbl.TextXAlignment = Enum.TextXAlignment.Left
+        keyLbl.Parent = card
+
+        local metaLbl = Instance.new("TextLabel")
+        metaLbl.Size = UDim2.new(1,-82,0,11); metaLbl.Position = UDim2.new(0,24,0,36)
+        metaLbl.BackgroundTransparency = 1
+        metaLbl.Text = (a.created or "unknown") .. " · " .. (a.active and "✓ Active" or "✕ Revoked")
+        metaLbl.TextColor3 = T.TextMuted; metaLbl.TextSize = 9; metaLbl.Font = Enum.Font.Gotham
+        metaLbl.TextXAlignment = Enum.TextXAlignment.Left; metaLbl.Parent = card
+
+        local copyAdminBtn = Instance.new("TextButton")
+        copyAdminBtn.Size = UDim2.new(0,28,0,28); copyAdminBtn.Position = UDim2.new(1,-62,0.5,-14)
+        copyAdminBtn.BackgroundColor3 = Color3.fromRGB(80,50,160); copyAdminBtn.BackgroundTransparency = 0.75
+        copyAdminBtn.Text = "📋"; copyAdminBtn.TextSize = 12; copyAdminBtn.Font = Enum.Font.GothamBold
+        copyAdminBtn.BorderSizePixel = 0; copyAdminBtn.AutoButtonColor = false; copyAdminBtn.Parent = card
+        corner(copyAdminBtn, 6)
+        copyAdminBtn.MouseEnter:Connect(function() tw(copyAdminBtn, {BackgroundTransparency = 0.45}, 0.12) end)
+        copyAdminBtn.MouseLeave:Connect(function() tw(copyAdminBtn, {BackgroundTransparency = 0.75}, 0.12) end)
+        copyAdminBtn.MouseButton1Click:Connect(function()
+            if setclipboard then setclipboard(a.key); notifySuccess("Copied", a.key)
+            else notifyWarn("Unavailable", "Clipboard unsupported") end
+        end)
+
+        local deleteAdminBtn = Instance.new("TextButton")
+        deleteAdminBtn.Size = UDim2.new(0,28,0,28); deleteAdminBtn.Position = UDim2.new(1,-30,0.5,-14)
+        deleteAdminBtn.BackgroundColor3 = T.Danger; deleteAdminBtn.BackgroundTransparency = 0.75
+        deleteAdminBtn.Text = "✕"; deleteAdminBtn.TextColor3 = T.Danger
+        deleteAdminBtn.TextSize = 13; deleteAdminBtn.Font = Enum.Font.GothamBold
+        deleteAdminBtn.BorderSizePixel = 0; deleteAdminBtn.AutoButtonColor = false
+        deleteAdminBtn.Parent = card; corner(deleteAdminBtn, 6)
+        deleteAdminBtn.MouseEnter:Connect(function() tw(deleteAdminBtn, {BackgroundTransparency = 0.45}, 0.12) end)
+        deleteAdminBtn.MouseLeave:Connect(function() tw(deleteAdminBtn, {BackgroundTransparency = 0.75}, 0.12) end)
+        deleteAdminBtn.MouseButton1Click:Connect(function()
+            -- Remove from table entirely (hard delete)
+            table.remove(validAdmins, i)
+            saveAdmins(validAdmins)
+            refreshAdminList()
+            notifyWarn("Admin Removed", a.key)
+            sendWebhook("🛡 Admin Key Deleted", "**Key:** ||"..a.key.."||", 15158332)
+        end)
+    end
+end
+refreshAdminList()
+
+-- Owner only: initially hide admin sections from non-owners (will be set after login)
+secAdminKeys.Visible = false
+secAdminList.Visible = false
+
+-- Generate admin key handler
+genAdminBtn.MouseButton1Click:Connect(function()
+    if not isOwner then return end
+    tw(genAdminBtn, {BackgroundTransparency = 0.5}, 0.05)
+    task.delay(0.1, function() tw(genAdminBtn, {BackgroundTransparency = 0.15}, 0.2) end)
+    local newAdminKey = generateAdminKey()
+    validAdmins = loadAdmins()
+    table.insert(validAdmins, {key = newAdminKey, active = true, created = os.date("%Y-%m-%d %H:%M"), createdBy = player.Name})
+    saveAdmins(validAdmins)
+    adminKeyOutputBox.Text = newAdminKey
+    refreshAdminList()
+    addLog("Admin key generated: "..newAdminKey)
+    notifySuccess("Admin Key Generated", newAdminKey)
+    sendWebhook("🛡 Admin Key Generated", "**By:** "..player.Name.."\n**Key:** ||"..newAdminKey.."||", 9442302, {
+        {name = "Total Admins", value = tostring(#validAdmins), inline = true},
+    })
+end)
+
+revokeAllAdminsBtn.MouseButton1Click:Connect(function()
+    if not isOwner then return end
+    tw(revokeAllAdminsBtn, {BackgroundTransparency = 0.4}, 0.05)
+    task.delay(0.1, function() tw(revokeAllAdminsBtn, {BackgroundTransparency = 0.8}, 0.2) end)
+    validAdmins = loadAdmins()
+    -- Hard delete all admin keys
+    validAdmins = {}
+    saveAdmins(validAdmins); refreshAdminList()
+    notifyWarn("All Admins Revoked", "All admin keys deleted")
+    sendWebhook("⚠ All Admin Keys Deleted", "**By:** "..player.Name, 15158332)
+end)
 
 genBtn.MouseButton1Click:Connect(function()
     tw(genBtn, {BackgroundTransparency = 0.5}, 0.05)
@@ -1656,11 +1930,10 @@ end)
 revokeAllBtn.MouseButton1Click:Connect(function()
     tw(revokeAllBtn, {BackgroundTransparency = 0.4}, 0.05)
     task.delay(0.1, function() tw(revokeAllBtn, {BackgroundTransparency = 0.8}, 0.2) end)
-    validKeys = loadKeys()
-    for _, k in ipairs(validKeys) do k.active = false end
+    validKeys = {}
     saveKeys(validKeys); refreshKeyList()
-    notifyWarn("All Keys Revoked", "All keys deactivated")
-    sendWebhook("⚠ All Keys Revoked", "**By:** "..player.Name, 15158332)
+    notifyWarn("All Keys Deleted", "All user keys deleted")
+    sendWebhook("⚠ All Keys Deleted", "**By:** "..player.Name, 15158332)
 end)
 
 apClose.MouseButton1Click:Connect(function()
@@ -1668,9 +1941,12 @@ apClose.MouseButton1Click:Connect(function()
     task.delay(0.3, function() adminPanel.Visible = false; adminPanel.BackgroundTransparency = 0 end)
 end)
 
--- Toggle function (called by K hotkey)
+-- Toggle function (called by K hotkey) — owners AND admins can open it
 local function toggleAdminPanel()
-    if not isOwner then return end
+    if not isOwner and not isAdmin then return end
+    -- Show/hide owner-only admin key sections
+    secAdminKeys.Visible = isOwner
+    secAdminList.Visible = isOwner
     if adminPanel.Visible then
         tw(adminPanel, {Size = UDim2.new(0, 380, 0, 0), BackgroundTransparency = 1}, 0.25, Enum.EasingStyle.Quart)
         task.delay(0.28, function() adminPanel.Visible = false; adminPanel.Size = UDim2.new(0, 380, 0, 520); adminPanel.BackgroundTransparency = 0 end)
@@ -1679,7 +1955,11 @@ local function toggleAdminPanel()
         adminPanel.BackgroundTransparency = 1
         adminPanel.Visible = true
         refreshKeyList()
+        if isOwner then refreshAdminList() end
         tw(adminPanel, {Size = UDim2.new(0, 380, 0, 520), BackgroundTransparency = 0}, 0.35, Enum.EasingStyle.Back)
+        -- Update panel title based on role
+        apTitle.Text = isOwner and "Owner Admin Panel" or "🛡️ Admin Panel"
+        apIcon.Text = isOwner and "👑" or "🛡️"
     end
 end
 
@@ -2050,317 +2330,320 @@ local function markWhatsNewSeen()
     safeWrite(WHATS_NEW_FILE, WHATS_NEW_VERSION)
 end
 
-if not hasSeenWhatsNew() then
+_G.showWhatsNew = function(callback)
+    if hasSeenWhatsNew() then
+        if callback then task.defer(callback) end
+        return
+    end
     markWhatsNewSeen()
-    task.delay(1.8, function()   -- small delay so hub finishes animating in first
+    
+    -- ── Full-screen backdrop ──
+    local wnBackdrop = Instance.new("Frame")
+    wnBackdrop.Name = "WhatsNewBackdrop"
+    wnBackdrop.Size = UDim2.new(1, 0, 1, 0)
+    wnBackdrop.Position = UDim2.new(0, 0, 0, 0)
+    wnBackdrop.BackgroundColor3 = Color3.fromRGB(2, 2, 8)
+    wnBackdrop.BackgroundTransparency = 1          -- start invisible
+    wnBackdrop.ZIndex = 200
+    wnBackdrop.Parent = gui
 
-        -- ── Full-screen backdrop ──
-        local wnBackdrop = Instance.new("Frame")
-        wnBackdrop.Name = "WhatsNewBackdrop"
-        wnBackdrop.Size = UDim2.new(1, 0, 1, 0)
-        wnBackdrop.Position = UDim2.new(0, 0, 0, 0)
-        wnBackdrop.BackgroundColor3 = Color3.fromRGB(2, 2, 8)
-        wnBackdrop.BackgroundTransparency = 1          -- start invisible
-        wnBackdrop.ZIndex = 200
-        wnBackdrop.Parent = gui
+    -- Extra dark overlay for depth
+    local wnDarkLayer = Instance.new("Frame")
+    wnDarkLayer.Size = UDim2.new(1, 0, 1, 0)
+    wnDarkLayer.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    wnDarkLayer.BackgroundTransparency = 1
+    wnDarkLayer.BorderSizePixel = 0
+    wnDarkLayer.ZIndex = 200
+    wnDarkLayer.Parent = wnBackdrop
 
-        -- Extra dark overlay for depth
-        local wnDarkLayer = Instance.new("Frame")
-        wnDarkLayer.Size = UDim2.new(1, 0, 1, 0)
-        wnDarkLayer.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-        wnDarkLayer.BackgroundTransparency = 1
-        wnDarkLayer.BorderSizePixel = 0
-        wnDarkLayer.ZIndex = 200
-        wnDarkLayer.Parent = wnBackdrop
-
-        -- Animated particle dots in background
-        local function spawnDot()
-            local dot = Instance.new("Frame")
-            dot.Size = UDim2.new(0, math.random(2, 5), 0, math.random(2, 5))
-            dot.Position = UDim2.new(math.random(), 0, math.random(), 0)
-            dot.BackgroundColor3 = Color3.fromHSV(math.random()*0.1 + 0.75, 0.8, 1)
-            dot.BackgroundTransparency = math.random() * 0.5 + 0.3
-            dot.BorderSizePixel = 0
-            dot.ZIndex = 201
-            dot.Parent = wnBackdrop
-            corner(dot, 3)
-            task.spawn(function()
-                local t = math.random(3, 8)
-                tw(dot, {Position = UDim2.new(dot.Position.X.Scale, 0, dot.Position.Y.Scale - 0.15, 0), BackgroundTransparency = 1}, t, Enum.EasingStyle.Sine)
-                task.wait(t)
-                dot:Destroy()
-            end)
+    -- Animated particle dots in background
+    local function spawnDot()
+        local dot = Instance.new("Frame")
+        dot.Size = UDim2.new(0, math.random(2, 5), 0, math.random(2, 5))
+        dot.Position = UDim2.new(math.random(), 0, math.random(), 0)
+        dot.BackgroundColor3 = Color3.fromHSV(math.random()*0.1 + 0.75, 0.8, 1)
+        dot.BackgroundTransparency = math.random() * 0.5 + 0.3
+        dot.BorderSizePixel = 0
+        dot.ZIndex = 201
+        dot.Parent = wnBackdrop
+        corner(dot, 3)
+        task.spawn(function()
+            local t = math.random(3, 8)
+            tw(dot, {Position = UDim2.new(dot.Position.X.Scale, 0, dot.Position.Y.Scale - 0.15, 0), BackgroundTransparency = 1}, t, Enum.EasingStyle.Sine)
+            task.wait(t)
+            dot:Destroy()
+        end)
+    end
+    task.spawn(function()
+        for i = 1, 28 do
+            spawnDot()
+            task.wait(0.07)
         end
-        task.spawn(function()
-            for i = 1, 28 do
-                spawnDot()
-                task.wait(0.07)
-            end
-            while wnBackdrop and wnBackdrop.Parent do
-                task.wait(0.4)
-                pcall(spawnDot)
-            end
-        end)
-
-        -- ── Glass modal card ──
-        local wnCard = Instance.new("Frame")
-        wnCard.Name = "WhatsNewCard"
-        wnCard.Size = UDim2.new(0, 460, 0, 0)          -- animate height in
-        wnCard.Position = UDim2.new(0.5, -230, 0.5, -260)
-        wnCard.BackgroundColor3 = Color3.fromRGB(14, 12, 20)
-        wnCard.BackgroundTransparency = 0.3            -- glass-like 0.7 opacity
-        wnCard.BorderSizePixel = 0
-        wnCard.ClipsDescendants = true
-        wnCard.ZIndex = 202
-        wnCard.Parent = gui
-        corner(wnCard, 18)
-
-        local wnStroke = stroke(wnCard, T.Accent, 1.5)
-        wnStroke.Transparency = 1
-
-        -- Glass shimmer overlay
-        local wnGlass = Instance.new("Frame")
-        wnGlass.Size = UDim2.new(1, 0, 1, 0)
-        wnGlass.BackgroundColor3 = Color3.fromRGB(180, 140, 255)
-        wnGlass.BackgroundTransparency = 0.97
-        wnGlass.BorderSizePixel = 0
-        wnGlass.ZIndex = 203
-        wnGlass.Parent = wnCard
-
-        -- Top accent glow bar
-        local wnTopBar = Instance.new("Frame")
-        wnTopBar.Size = UDim2.new(1, 0, 0, 4)
-        wnTopBar.BackgroundColor3 = T.Accent
-        wnTopBar.BorderSizePixel = 0
-        wnTopBar.ZIndex = 204
-        wnTopBar.Parent = wnCard
-        local wnTopGrad = Instance.new("UIGradient")
-        wnTopGrad.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0,   T.AccentDark),
-            ColorSequenceKeypoint.new(0.25, T.AccentGlow),
-            ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(255, 200, 255)),
-            ColorSequenceKeypoint.new(0.75, T.AccentGlow),
-            ColorSequenceKeypoint.new(1,   T.AccentDark),
-        })
-        wnTopGrad.Parent = wnTopBar
-        task.spawn(function()
-            while wnTopBar and wnTopBar.Parent do
-                wnTopGrad.Offset = Vector2.new(-1, 0)
-                tw(wnTopGrad, {Offset = Vector2.new(1, 0)}, 2.5, Enum.EasingStyle.Linear)
-                task.wait(2.5)
-            end
-        end)
-
-        -- ── Header ──
-        local wnIcon = Instance.new("TextLabel")
-        wnIcon.Size = UDim2.new(0, 60, 0, 60)
-        wnIcon.Position = UDim2.new(0.5, -30, 0, 22)
-        wnIcon.BackgroundColor3 = T.Accent
-        wnIcon.BackgroundTransparency = 0.82
-        wnIcon.Text = "✨"
-        wnIcon.TextSize = 30
-        wnIcon.Font = Enum.Font.GothamBold
-        wnIcon.TextColor3 = T.AccentGlow
-        wnIcon.ZIndex = 204
-        wnIcon.Parent = wnCard
-        corner(wnIcon, 30)
-
-        local wnTitle = Instance.new("TextLabel")
-        wnTitle.Size = UDim2.new(1, -40, 0, 28)
-        wnTitle.Position = UDim2.new(0, 20, 0, 90)
-        wnTitle.BackgroundTransparency = 1
-        wnTitle.Text = "WHAT'S NEW IN v3.1"
-        wnTitle.TextColor3 = T.Text
-        wnTitle.TextSize = 22
-        wnTitle.Font = Enum.Font.GothamBold
-        wnTitle.ZIndex = 204
-        wnTitle.Parent = wnCard
-
-        local wnSub = Instance.new("TextLabel")
-        wnSub.Size = UDim2.new(1, -40, 0, 16)
-        wnSub.Position = UDim2.new(0, 20, 0, 120)
-        wnSub.BackgroundTransparency = 1
-        wnSub.Text = "Origin's SOFB Hub — latest updates & improvements"
-        wnSub.TextColor3 = T.TextDim
-        wnSub.TextSize = 12
-        wnSub.Font = Enum.Font.Gotham
-        wnSub.ZIndex = 204
-        wnSub.Parent = wnCard
-
-        -- Divider
-        local wnDiv = Instance.new("Frame")
-        wnDiv.Size = UDim2.new(1, -40, 0, 1)
-        wnDiv.Position = UDim2.new(0, 20, 0, 148)
-        wnDiv.BackgroundColor3 = T.Accent
-        wnDiv.BackgroundTransparency = 0.6
-        wnDiv.BorderSizePixel = 0
-        wnDiv.ZIndex = 204
-        wnDiv.Parent = wnCard
-
-        -- ── Changelog entries ──
-        local entries = {
-            { icon = "🔐", color = Color3.fromRGB(255, 215, 0),   title = "SECRET Rarity ESP",   body = "Brainrots of SECRET rarity now appear in the ESP with golden highlighting and billboard labels." },
-            { icon = "🏛",  color = Color3.fromRGB(210, 105, 30),  title = "ANCIENT Rarity ESP",  body = "ANCIENT rarity support added — bronze/amber highlight and full filter toggle support." },
-            { icon = "✨", color = T.AccentGlow,                   title = "What's New Screen",   body = "This animated overlay now shows once per version so you never miss an update." },
-            { icon = "🐛", color = T.Success,                      title = "Bug Fixes & Polish",   body = "Misc ESP cleanup fixes and performance improvements to the rarity scan loop." },
-        }
-
-        local yBase = 162
-        for i, entry in ipairs(entries) do
-            local eRow = Instance.new("Frame")
-            eRow.Size = UDim2.new(1, -40, 0, 56)
-            eRow.Position = UDim2.new(0, 20, 0, yBase + (i - 1) * 66)
-            eRow.BackgroundColor3 = entry.color
-            eRow.BackgroundTransparency = 0.93
-            eRow.BorderSizePixel = 0
-            eRow.ZIndex = 204
-            eRow.Parent = wnCard
-            corner(eRow, 10)
-            stroke(eRow, entry.color, 1)
-
-            local eAccent = Instance.new("Frame")
-            eAccent.Size = UDim2.new(0, 3, 1, -12)
-            eAccent.Position = UDim2.new(0, 10, 0, 6)
-            eAccent.BackgroundColor3 = entry.color
-            eAccent.BorderSizePixel = 0
-            eAccent.ZIndex = 205
-            eAccent.Parent = eRow
-            corner(eAccent, 2)
-
-            local eIcon = Instance.new("TextLabel")
-            eIcon.Size = UDim2.new(0, 36, 0, 36)
-            eIcon.Position = UDim2.new(0, 18, 0.5, -18)
-            eIcon.BackgroundColor3 = entry.color
-            eIcon.BackgroundTransparency = 0.85
-            eIcon.Text = entry.icon
-            eIcon.TextSize = 18
-            eIcon.Font = Enum.Font.GothamBold
-            eIcon.ZIndex = 205
-            eIcon.Parent = eRow
-            corner(eIcon, 18)
-
-            local eTitle = Instance.new("TextLabel")
-            eTitle.Size = UDim2.new(1, -70, 0, 17)
-            eTitle.Position = UDim2.new(0, 62, 0, 8)
-            eTitle.BackgroundTransparency = 1
-            eTitle.Text = entry.title
-            eTitle.TextColor3 = entry.color
-            eTitle.TextSize = 13
-            eTitle.Font = Enum.Font.GothamBold
-            eTitle.TextXAlignment = Enum.TextXAlignment.Left
-            eTitle.ZIndex = 205
-            eTitle.Parent = eRow
-
-            local eBody = Instance.new("TextLabel")
-            eBody.Size = UDim2.new(1, -70, 0, 28)
-            eBody.Position = UDim2.new(0, 62, 0, 25)
-            eBody.BackgroundTransparency = 1
-            eBody.Text = entry.body
-            eBody.TextColor3 = T.TextDim
-            eBody.TextSize = 10
-            eBody.Font = Enum.Font.Gotham
-            eBody.TextXAlignment = Enum.TextXAlignment.Left
-            eBody.TextWrapped = true
-            eBody.ZIndex = 205
-            eBody.Parent = eRow
+        while wnBackdrop and wnBackdrop.Parent do
+            task.wait(0.4)
+            pcall(spawnDot)
         end
+    end)
 
-        -- ── Dismiss button ──
-        local totalEntries = #entries
-        local btnY = yBase + totalEntries * 66 + 10
+    -- ── Glass modal card ──
+    local wnCard = Instance.new("Frame")
+    wnCard.Name = "WhatsNewCard"
+    wnCard.Size = UDim2.new(0, 460, 0, 0)          -- animate height in
+    wnCard.Position = UDim2.new(0.5, -230, 0.5, -260)
+    wnCard.BackgroundColor3 = Color3.fromRGB(14, 12, 20)
+    wnCard.BackgroundTransparency = 0.3            -- glass-like 0.7 opacity
+    wnCard.BorderSizePixel = 0
+    wnCard.ClipsDescendants = true
+    wnCard.ZIndex = 202
+    wnCard.Parent = gui
+    corner(wnCard, 18)
 
-        local wnDismiss = Instance.new("TextButton")
-        wnDismiss.Size = UDim2.new(1, -40, 0, 40)
-        wnDismiss.Position = UDim2.new(0, 20, 0, btnY)
-        wnDismiss.BackgroundColor3 = T.Accent
-        wnDismiss.BackgroundTransparency = 0.15
-        wnDismiss.Text = "⏳  Please wait... (3s)"
-        wnDismiss.TextColor3 = Color3.new(1, 1, 1)
-        wnDismiss.TextSize = 13
-        wnDismiss.Font = Enum.Font.GothamBold
-        wnDismiss.BorderSizePixel = 0
-        wnDismiss.AutoButtonColor = false
-        wnDismiss.ZIndex = 204
-        wnDismiss.Parent = wnCard
-        corner(wnDismiss, 10)
-        applyDarkGradient(wnDismiss)
+    local wnStroke = stroke(wnCard, T.Accent, 1.5)
+    wnStroke.Transparency = 1
 
-        local cardH = btnY + 58
-        local wnCanDismiss = false
+    -- Glass shimmer overlay
+    local wnGlass = Instance.new("Frame")
+    wnGlass.Size = UDim2.new(1, 0, 1, 0)
+    wnGlass.BackgroundColor3 = Color3.fromRGB(180, 140, 255)
+    wnGlass.BackgroundTransparency = 0.97
+    wnGlass.BorderSizePixel = 0
+    wnGlass.ZIndex = 203
+    wnGlass.Parent = wnCard
 
-        -- ── Animate in ──
-        tw(wnBackdrop, {BackgroundTransparency = 0.05}, 0.5, Enum.EasingStyle.Quart)  -- Very dark backdrop
-        tw(wnDarkLayer, {BackgroundTransparency = 0.45}, 0.5, Enum.EasingStyle.Quart)
-        task.wait(0.15)
-        tw(wnCard, {Size = UDim2.new(0, 460, 0, cardH)}, 0.55, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        task.delay(0.2, function() tw(wnStroke, {Transparency = 0.3}, 0.4) end)
-
-        -- Hide hub while overlay is up
-        mainHub.Visible = false
-
-        -- Pulse the icon
-        task.spawn(function()
-            while wnIcon and wnIcon.Parent do
-                tw(wnIcon, {BackgroundTransparency = 0.65, TextSize = 34}, 0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-                task.wait(0.8)
-                tw(wnIcon, {BackgroundTransparency = 0.82, TextSize = 30}, 0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-                task.wait(0.8)
-            end
-        end)
-
-        -- 3-second countdown before dismiss is allowed
-        task.spawn(function()
-            for i = 3, 1, -1 do
-                task.wait(1)
-                if not (wnDismiss and wnDismiss.Parent) then return end
-                if i > 1 then
-                    wnDismiss.Text = "⏳  Please wait... ("..tostring(i-1).."s)"
-                else
-                    -- Unlock!
-                    wnCanDismiss = true
-                    wnDismiss.Text = "✨  Got it! Let's go"
-                    wnDismiss.TextColor3 = Color3.new(1, 1, 1)
-                    wnDismiss.TextSize = 14
-                    tw(wnDismiss, {BackgroundColor3 = T.Accent}, 0.3)
-                    tw(wnDismiss, {BackgroundTransparency = 0.1}, 0.3)
-                    wnDismiss.MouseEnter:Connect(function()
-                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.0, TextSize = 15}, 0.2, Enum.EasingStyle.Quint) end
-                    end)
-                    wnDismiss.MouseLeave:Connect(function()
-                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.1, TextSize = 14}, 0.2, Enum.EasingStyle.Quint) end
-                    end)
-                    wnDismiss.MouseButton1Down:Connect(function()
-                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.3, TextSize = 13}, 0.1) end
-                    end)
-                    wnDismiss.MouseButton1Up:Connect(function()
-                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.0, TextSize = 15}, 0.1) end
-                    end)
-                end
-            end
-        end)
-
-        -- ── Dismiss ──
-        local function closeWhatsNew()
-            if not wnCanDismiss then return end
-            tw(wnCard, {Size = UDim2.new(0, 460, 0, 0), BackgroundTransparency = 1}, 0.35, Enum.EasingStyle.Quart)
-            tw(wnStroke, {Transparency = 1}, 0.25)
-            tw(wnBackdrop, {BackgroundTransparency = 1}, 0.4, Enum.EasingStyle.Quart)
-            tw(wnDarkLayer, {BackgroundTransparency = 1}, 0.35, Enum.EasingStyle.Quart)
-            -- Restore hub when overlay closes
-            mainHub.Visible = true
-            task.delay(0.45, function()
-                wnCard:Destroy()
-                wnBackdrop:Destroy()
-            end)
+    -- Top accent glow bar
+    local wnTopBar = Instance.new("Frame")
+    wnTopBar.Size = UDim2.new(1, 0, 0, 4)
+    wnTopBar.BackgroundColor3 = T.Accent
+    wnTopBar.BorderSizePixel = 0
+    wnTopBar.ZIndex = 204
+    wnTopBar.Parent = wnCard
+    local wnTopGrad = Instance.new("UIGradient")
+    wnTopGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   T.AccentDark),
+        ColorSequenceKeypoint.new(0.25, T.AccentGlow),
+        ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(255, 200, 255)),
+        ColorSequenceKeypoint.new(0.75, T.AccentGlow),
+        ColorSequenceKeypoint.new(1,   T.AccentDark),
+    })
+    wnTopGrad.Parent = wnTopBar
+    task.spawn(function()
+        while wnTopBar and wnTopBar.Parent do
+            wnTopGrad.Offset = Vector2.new(-1, 0)
+            tw(wnTopGrad, {Offset = Vector2.new(1, 0)}, 2.5, Enum.EasingStyle.Linear)
+            task.wait(2.5)
         end
+    end)
 
-        wnDismiss.MouseButton1Click:Connect(closeWhatsNew)
+    -- ── Header ──
+    local wnIcon = Instance.new("TextLabel")
+    wnIcon.Size = UDim2.new(0, 60, 0, 60)
+    wnIcon.Position = UDim2.new(0.5, -30, 0, 22)
+    wnIcon.BackgroundColor3 = T.Accent
+    wnIcon.BackgroundTransparency = 0.82
+    wnIcon.Text = "✨"
+    wnIcon.TextSize = 30
+    wnIcon.Font = Enum.Font.GothamBold
+    wnIcon.TextColor3 = T.AccentGlow
+    wnIcon.ZIndex = 204
+    wnIcon.Parent = wnCard
+    corner(wnIcon, 30)
 
-        -- Backdrop click also respects the lock
-        wnBackdrop.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                closeWhatsNew()
+    local wnTitle = Instance.new("TextLabel")
+    wnTitle.Size = UDim2.new(1, -40, 0, 28)
+    wnTitle.Position = UDim2.new(0, 20, 0, 90)
+    wnTitle.BackgroundTransparency = 1
+    wnTitle.Text = "WHAT'S NEW IN v3.1"
+    wnTitle.TextColor3 = T.Text
+    wnTitle.TextSize = 22
+    wnTitle.Font = Enum.Font.GothamBold
+    wnTitle.ZIndex = 204
+    wnTitle.Parent = wnCard
+
+    local wnSub = Instance.new("TextLabel")
+    wnSub.Size = UDim2.new(1, -40, 0, 16)
+    wnSub.Position = UDim2.new(0, 20, 0, 120)
+    wnSub.BackgroundTransparency = 1
+    wnSub.Text = "Origin's SOFB Hub — latest updates & improvements"
+    wnSub.TextColor3 = T.TextDim
+    wnSub.TextSize = 12
+    wnSub.Font = Enum.Font.Gotham
+    wnSub.ZIndex = 204
+    wnSub.Parent = wnCard
+
+    -- Divider
+    local wnDiv = Instance.new("Frame")
+    wnDiv.Size = UDim2.new(1, -40, 0, 1)
+    wnDiv.Position = UDim2.new(0, 20, 0, 148)
+    wnDiv.BackgroundColor3 = T.Accent
+    wnDiv.BackgroundTransparency = 0.6
+    wnDiv.BorderSizePixel = 0
+    wnDiv.ZIndex = 204
+    wnDiv.Parent = wnCard
+
+    -- ── Changelog entries ──
+    local entries = {
+        { icon = "🔐", color = Color3.fromRGB(255, 215, 0),   title = "SECRET Rarity ESP",   body = "Brainrots of SECRET rarity now appear in the ESP with golden highlighting and billboard labels." },
+        { icon = "🏛",  color = Color3.fromRGB(210, 105, 30),  title = "ANCIENT Rarity ESP",  body = "ANCIENT rarity support added — bronze/amber highlight and full filter toggle support." },
+        { icon = "✨", color = T.AccentGlow,                   title = "What's New Screen",   body = "This animated overlay now shows once per version so you never miss an update." },
+        { icon = "🐛", color = T.Success,                      title = "Bug Fixes & Polish",   body = "Misc ESP cleanup fixes and performance improvements to the rarity scan loop." },
+    }
+
+    local yBase = 162
+    for i, entry in ipairs(entries) do
+        local eRow = Instance.new("Frame")
+        eRow.Size = UDim2.new(1, -40, 0, 56)
+        eRow.Position = UDim2.new(0, 20, 0, yBase + (i - 1) * 66)
+        eRow.BackgroundColor3 = entry.color
+        eRow.BackgroundTransparency = 0.93
+        eRow.BorderSizePixel = 0
+        eRow.ZIndex = 204
+        eRow.Parent = wnCard
+        corner(eRow, 10)
+        stroke(eRow, entry.color, 1)
+
+        local eAccent = Instance.new("Frame")
+        eAccent.Size = UDim2.new(0, 3, 1, -12)
+        eAccent.Position = UDim2.new(0, 10, 0, 6)
+        eAccent.BackgroundColor3 = entry.color
+        eAccent.BorderSizePixel = 0
+        eAccent.ZIndex = 205
+        eAccent.Parent = eRow
+        corner(eAccent, 2)
+
+        local eIcon = Instance.new("TextLabel")
+        eIcon.Size = UDim2.new(0, 36, 0, 36)
+        eIcon.Position = UDim2.new(0, 18, 0.5, -18)
+        eIcon.BackgroundColor3 = entry.color
+        eIcon.BackgroundTransparency = 0.85
+        eIcon.Text = entry.icon
+        eIcon.TextSize = 18
+        eIcon.Font = Enum.Font.GothamBold
+        eIcon.ZIndex = 205
+        eIcon.Parent = eRow
+        corner(eIcon, 18)
+
+        local eTitle = Instance.new("TextLabel")
+        eTitle.Size = UDim2.new(1, -70, 0, 17)
+        eTitle.Position = UDim2.new(0, 62, 0, 8)
+        eTitle.BackgroundTransparency = 1
+        eTitle.Text = entry.title
+        eTitle.TextColor3 = entry.color
+        eTitle.TextSize = 13
+        eTitle.Font = Enum.Font.GothamBold
+        eTitle.TextXAlignment = Enum.TextXAlignment.Left
+        eTitle.ZIndex = 205
+        eTitle.Parent = eRow
+
+        local eBody = Instance.new("TextLabel")
+        eBody.Size = UDim2.new(1, -70, 0, 28)
+        eBody.Position = UDim2.new(0, 62, 0, 25)
+        eBody.BackgroundTransparency = 1
+        eBody.Text = entry.body
+        eBody.TextColor3 = T.TextDim
+        eBody.TextSize = 10
+        eBody.Font = Enum.Font.Gotham
+        eBody.TextXAlignment = Enum.TextXAlignment.Left
+        eBody.TextWrapped = true
+        eBody.ZIndex = 205
+        eBody.Parent = eRow
+    end
+
+    -- ── Dismiss button ──
+    local totalEntries = #entries
+    local btnY = yBase + totalEntries * 66 + 10
+
+    local wnDismiss = Instance.new("TextButton")
+    wnDismiss.Size = UDim2.new(1, -40, 0, 40)
+    wnDismiss.Position = UDim2.new(0, 20, 0, btnY)
+    wnDismiss.BackgroundColor3 = T.Accent
+    wnDismiss.BackgroundTransparency = 0.15
+    wnDismiss.Text = "⏳  Please wait... (3s)"
+    wnDismiss.TextColor3 = Color3.new(1, 1, 1)
+    wnDismiss.TextSize = 13
+    wnDismiss.Font = Enum.Font.GothamBold
+    wnDismiss.BorderSizePixel = 0
+    wnDismiss.AutoButtonColor = false
+    wnDismiss.ZIndex = 204
+    wnDismiss.Parent = wnCard
+    corner(wnDismiss, 10)
+    applyDarkGradient(wnDismiss)
+
+    local cardH = btnY + 58
+    local wnCanDismiss = false
+
+    -- ── Animate in ──
+    tw(wnBackdrop, {BackgroundTransparency = 0.05}, 0.5, Enum.EasingStyle.Quart)  -- Very dark backdrop
+    tw(wnDarkLayer, {BackgroundTransparency = 0.45}, 0.5, Enum.EasingStyle.Quart)
+    task.wait(0.15)
+    tw(wnCard, {Size = UDim2.new(0, 460, 0, cardH)}, 0.55, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    task.delay(0.2, function() tw(wnStroke, {Transparency = 0.3}, 0.4) end)
+
+    -- Pulse the icon
+    task.spawn(function()
+        while wnIcon and wnIcon.Parent do
+            tw(wnIcon, {BackgroundTransparency = 0.65, TextSize = 34}, 0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+            task.wait(0.8)
+            tw(wnIcon, {BackgroundTransparency = 0.82, TextSize = 30}, 0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+            task.wait(0.8)
+        end
+    end)
+
+    -- 3-second countdown before dismiss is allowed
+    task.spawn(function()
+        for i = 3, 1, -1 do
+            task.wait(1)
+            if not (wnDismiss and wnDismiss.Parent) then return end
+            if i > 1 then
+                wnDismiss.Text = "⏳  Please wait... ("..tostring(i-1).."s)"
+            else
+                -- Unlock!
+                wnCanDismiss = true
+                wnDismiss.Text = "✨  Got it! Let's go"
+                wnDismiss.TextColor3 = Color3.new(1, 1, 1)
+                wnDismiss.TextSize = 14
+                tw(wnDismiss, {BackgroundColor3 = T.Accent}, 0.3)
+                tw(wnDismiss, {BackgroundTransparency = 0.1}, 0.3)
+                wnDismiss.MouseEnter:Connect(function()
+                    if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.0, TextSize = 15}, 0.2, Enum.EasingStyle.Quint) end
+                end)
+                wnDismiss.MouseLeave:Connect(function()
+                    if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.1, TextSize = 14}, 0.2, Enum.EasingStyle.Quint) end
+                end)
+                wnDismiss.MouseButton1Down:Connect(function()
+                    if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.3, TextSize = 13}, 0.1) end
+                end)
+                wnDismiss.MouseButton1Up:Connect(function()
+                    if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.0, TextSize = 15}, 0.1) end
+                end)
             end
+        end
+    end)
+
+    -- ── Dismiss ──
+    local function closeWhatsNew()
+        if not wnCanDismiss then return end
+        tw(wnCard, {Size = UDim2.new(0, 460, 0, 0), BackgroundTransparency = 1}, 0.35, Enum.EasingStyle.Quart)
+        tw(wnStroke, {Transparency = 1}, 0.25)
+        tw(wnBackdrop, {BackgroundTransparency = 1}, 0.4, Enum.EasingStyle.Quart)
+        tw(wnDarkLayer, {BackgroundTransparency = 1}, 0.35, Enum.EasingStyle.Quart)
+        
+        task.delay(0.45, function()
+            wnCard:Destroy()
+            wnBackdrop:Destroy()
         end)
+        
+        -- Start hub animation after 1 second
+        if callback then
+            task.delay(1, function() callback() end)
+        end
+    end
+
+    wnDismiss.MouseButton1Click:Connect(closeWhatsNew)
+
+    -- Backdrop click also respects the lock
+    wnBackdrop.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            closeWhatsNew()
+        end
     end)
 end
