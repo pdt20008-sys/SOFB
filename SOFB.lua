@@ -1,6 +1,6 @@
 --[[
     ╔═══════════════════════════════════════════════╗
-    ║       Origin's SOFB Hub  v3.0                 ║
+    ║       Origin's SOFB Hub  v3.1                 ║
     ║  Login │ Key System │ UI Library │ Auto-TP    ║
     ╚═══════════════════════════════════════════════╝
 ]]
@@ -178,10 +178,11 @@ local Settings = {
     Rarities     = {
         NORMAL = false, GOLDEN = false, DIAMOND = false, EMERALD = false,
         RUBY = true, RAINBOW = true, VOID = true, ETHEREAL = true, CELESTIAL = true,
+        SECRET = true, ANCIENT = true, MYTHICAL = true,
     },
 }
 
-local RarityOrder = {"NORMAL","GOLDEN","DIAMOND","EMERALD","RUBY","RAINBOW","VOID","ETHEREAL","CELESTIAL"}
+local RarityOrder = {"NORMAL","GOLDEN","DIAMOND","EMERALD","RUBY","RAINBOW","VOID","ETHEREAL","CELESTIAL","SECRET","ANCIENT","MYTHICAL"}
 
 local Stats = {SessionStart = tick(), TotalTPs = 0, RarityFinds = {}}
 for _,r in ipairs(RarityOrder) do Stats.RarityFinds[r]=0 end
@@ -257,11 +258,15 @@ local T = {
         RUBY = Color3.fromRGB(255,30,80), RAINBOW = Color3.fromRGB(255,60,200),
         VOID = Color3.fromRGB(130,50,210), ETHEREAL = Color3.fromRGB(100,40,180),
         CELESTIAL = Color3.fromRGB(220,30,120),
+        SECRET   = Color3.fromRGB(255, 215, 0),    -- Shimmering gold
+        ANCIENT  = Color3.fromRGB(210, 105, 30),   -- Deep bronze/amber
+        MYTHICAL = Color3.fromRGB(255, 80, 220),   -- Vibrant magenta-pink
     },
     RarityTier = {
         NORMAL="⬜ Common", GOLDEN="🟨 Uncommon", DIAMOND="🟦 Rare",
         EMERALD="🟩 Epic", RUBY="🟥 Legendary", RAINBOW="🌈 Mythic",
-        VOID="🟪 Mythic+", ETHEREAL="👁 Godly", CELESTIAL="⭐ Supreme",
+        VOID="🟪 Void", ETHEREAL="👁 Ethereal", CELESTIAL="⭐ Celestial",
+        SECRET="🔐 Secret", ANCIENT="🏛 Ancient", MYTHICAL="✨ Mythical",
     },
 }
 
@@ -1800,12 +1805,17 @@ end)
 -- ESP System
 local espHighlights = {}
 local rarityMapping = {
+    -- Alternate names the game might use
     ["COMMON"] = "NORMAL", ["UNCOMMON"] = "GOLDEN", ["RARE"] = "DIAMOND",
-    ["EPIC"] = "EMERALD", ["LEGENDARY"] = "RUBY", ["MYTHIC+"] = "VOID",
-    ["MYTHIC"] = "RAINBOW", ["GODLY"] = "ETHEREAL", ["SUPREME"] = "CELESTIAL",
+    ["EPIC"] = "EMERALD", ["LEGENDARY"] = "RUBY",
+    ["GODLY"] = "ETHEREAL", ["SUPREME"] = "CELESTIAL",
+    -- Direct rarity/rank names (from in-game Rarity + Rank TextLabels)
     ["NORMAL"] = "NORMAL", ["GOLDEN"] = "GOLDEN", ["DIAMOND"] = "DIAMOND",
     ["EMERALD"] = "EMERALD", ["RUBY"] = "RUBY", ["RAINBOW"] = "RAINBOW",
-    ["VOID"] = "VOID", ["ETHEREAL"] = "ETHEREAL", ["CELESTIAL"] = "CELESTIAL"
+    ["VOID"] = "VOID", ["ETHEREAL"] = "ETHEREAL", ["CELESTIAL"] = "CELESTIAL",
+    ["SECRET"] = "SECRET", ["ANCIENT"] = "ANCIENT", ["MYTHICAL"] = "MYTHICAL",
+    -- Extra variants
+    ["MYTHIC"] = "MYTHICAL", ["MYTHIC+"] = "VOID",
 }
 
 local function updateESP()
@@ -1841,12 +1851,24 @@ local function updateESP()
             
             local b = hitbox:FindFirstChild("LevelBoard", true)
             local f = b and b:FindFirstChild("Frame")
+            local txt = ""
             if f then
-                local rl = f:FindFirstChild("Rarity")
-                if rl and rl:IsA("TextLabel") and rl.Text ~= "" then
-                    txt = rl.Text:upper()
+                -- Primary: read the Rarity TextLabel
+                local rarityLbl = f:FindFirstChild("Rarity")
+                if rarityLbl and rarityLbl:IsA("TextLabel") and rarityLbl.Text ~= "" then
+                    txt = rarityLbl.Text:upper()
                     for word, key in pairs(rarityMapping) do
-                        if txt:find(word) then matchRarity = key; break end
+                        if txt:find(word, 1, true) then matchRarity = key; break end
+                    end
+                end
+                -- Fallback: if still NORMAL, try the Rank TextLabel
+                if matchRarity == "NORMAL" then
+                    local rankLbl = f:FindFirstChild("Rank")
+                    if rankLbl and rankLbl:IsA("TextLabel") and rankLbl.Text ~= "" then
+                        local rtxt = rankLbl.Text:upper()
+                        for word, key in pairs(rarityMapping) do
+                            if rtxt:find(word, 1, true) then matchRarity = key; break end
+                        end
                     end
                 end
                 local nLbl = f:FindFirstChild("NameRot")
@@ -2009,6 +2031,336 @@ task.spawn(function()
 end)
 
 -- Startup
-addLog("Origin's SOFB Hub v3.0 loaded!")
+addLog("Origin's SOFB Hub v3.1 loaded!")
 addLog("[G] Zone 12  [B] Plot  [R⇧] Toggle  [N] Test Notif")
 addLog("Enable Auto-TP to start scanning…")
+
+-- ════════════════════════════════════════════
+--  WHAT'S NEW? OVERLAY  (shows once per version)
+-- ════════════════════════════════════════════
+local WHATS_NEW_VERSION = "3.1"
+local WHATS_NEW_FILE    = "SOFB_WhatsNew_seen.txt"
+
+local function hasSeenWhatsNew()
+    local raw = safeRead(WHATS_NEW_FILE)
+    return raw and raw:find(WHATS_NEW_VERSION, 1, true) ~= nil
+end
+
+local function markWhatsNewSeen()
+    safeWrite(WHATS_NEW_FILE, WHATS_NEW_VERSION)
+end
+
+if not hasSeenWhatsNew() then
+    markWhatsNewSeen()
+    task.delay(1.8, function()   -- small delay so hub finishes animating in first
+
+        -- ── Full-screen backdrop ──
+        local wnBackdrop = Instance.new("Frame")
+        wnBackdrop.Name = "WhatsNewBackdrop"
+        wnBackdrop.Size = UDim2.new(1, 0, 1, 0)
+        wnBackdrop.Position = UDim2.new(0, 0, 0, 0)
+        wnBackdrop.BackgroundColor3 = Color3.fromRGB(2, 2, 8)
+        wnBackdrop.BackgroundTransparency = 1          -- start invisible
+        wnBackdrop.ZIndex = 200
+        wnBackdrop.Parent = gui
+
+        -- Extra dark overlay for depth
+        local wnDarkLayer = Instance.new("Frame")
+        wnDarkLayer.Size = UDim2.new(1, 0, 1, 0)
+        wnDarkLayer.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        wnDarkLayer.BackgroundTransparency = 1
+        wnDarkLayer.BorderSizePixel = 0
+        wnDarkLayer.ZIndex = 200
+        wnDarkLayer.Parent = wnBackdrop
+
+        -- Animated particle dots in background
+        local function spawnDot()
+            local dot = Instance.new("Frame")
+            dot.Size = UDim2.new(0, math.random(2, 5), 0, math.random(2, 5))
+            dot.Position = UDim2.new(math.random(), 0, math.random(), 0)
+            dot.BackgroundColor3 = Color3.fromHSV(math.random()*0.1 + 0.75, 0.8, 1)
+            dot.BackgroundTransparency = math.random() * 0.5 + 0.3
+            dot.BorderSizePixel = 0
+            dot.ZIndex = 201
+            dot.Parent = wnBackdrop
+            corner(dot, 3)
+            task.spawn(function()
+                local t = math.random(3, 8)
+                tw(dot, {Position = UDim2.new(dot.Position.X.Scale, 0, dot.Position.Y.Scale - 0.15, 0), BackgroundTransparency = 1}, t, Enum.EasingStyle.Sine)
+                task.wait(t)
+                dot:Destroy()
+            end)
+        end
+        task.spawn(function()
+            for i = 1, 28 do
+                spawnDot()
+                task.wait(0.07)
+            end
+            while wnBackdrop and wnBackdrop.Parent do
+                task.wait(0.4)
+                pcall(spawnDot)
+            end
+        end)
+
+        -- ── Glass modal card ──
+        local wnCard = Instance.new("Frame")
+        wnCard.Name = "WhatsNewCard"
+        wnCard.Size = UDim2.new(0, 460, 0, 0)          -- animate height in
+        wnCard.Position = UDim2.new(0.5, -230, 0.5, -260)
+        wnCard.BackgroundColor3 = Color3.fromRGB(14, 12, 20)
+        wnCard.BackgroundTransparency = 0.3            -- glass-like 0.7 opacity
+        wnCard.BorderSizePixel = 0
+        wnCard.ClipsDescendants = true
+        wnCard.ZIndex = 202
+        wnCard.Parent = gui
+        corner(wnCard, 18)
+
+        local wnStroke = stroke(wnCard, T.Accent, 1.5)
+        wnStroke.Transparency = 1
+
+        -- Glass shimmer overlay
+        local wnGlass = Instance.new("Frame")
+        wnGlass.Size = UDim2.new(1, 0, 1, 0)
+        wnGlass.BackgroundColor3 = Color3.fromRGB(180, 140, 255)
+        wnGlass.BackgroundTransparency = 0.97
+        wnGlass.BorderSizePixel = 0
+        wnGlass.ZIndex = 203
+        wnGlass.Parent = wnCard
+
+        -- Top accent glow bar
+        local wnTopBar = Instance.new("Frame")
+        wnTopBar.Size = UDim2.new(1, 0, 0, 4)
+        wnTopBar.BackgroundColor3 = T.Accent
+        wnTopBar.BorderSizePixel = 0
+        wnTopBar.ZIndex = 204
+        wnTopBar.Parent = wnCard
+        local wnTopGrad = Instance.new("UIGradient")
+        wnTopGrad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0,   T.AccentDark),
+            ColorSequenceKeypoint.new(0.25, T.AccentGlow),
+            ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(255, 200, 255)),
+            ColorSequenceKeypoint.new(0.75, T.AccentGlow),
+            ColorSequenceKeypoint.new(1,   T.AccentDark),
+        })
+        wnTopGrad.Parent = wnTopBar
+        task.spawn(function()
+            while wnTopBar and wnTopBar.Parent do
+                wnTopGrad.Offset = Vector2.new(-1, 0)
+                tw(wnTopGrad, {Offset = Vector2.new(1, 0)}, 2.5, Enum.EasingStyle.Linear)
+                task.wait(2.5)
+            end
+        end)
+
+        -- ── Header ──
+        local wnIcon = Instance.new("TextLabel")
+        wnIcon.Size = UDim2.new(0, 60, 0, 60)
+        wnIcon.Position = UDim2.new(0.5, -30, 0, 22)
+        wnIcon.BackgroundColor3 = T.Accent
+        wnIcon.BackgroundTransparency = 0.82
+        wnIcon.Text = "✨"
+        wnIcon.TextSize = 30
+        wnIcon.Font = Enum.Font.GothamBold
+        wnIcon.TextColor3 = T.AccentGlow
+        wnIcon.ZIndex = 204
+        wnIcon.Parent = wnCard
+        corner(wnIcon, 30)
+
+        local wnTitle = Instance.new("TextLabel")
+        wnTitle.Size = UDim2.new(1, -40, 0, 28)
+        wnTitle.Position = UDim2.new(0, 20, 0, 90)
+        wnTitle.BackgroundTransparency = 1
+        wnTitle.Text = "WHAT'S NEW IN v3.1"
+        wnTitle.TextColor3 = T.Text
+        wnTitle.TextSize = 22
+        wnTitle.Font = Enum.Font.GothamBold
+        wnTitle.ZIndex = 204
+        wnTitle.Parent = wnCard
+
+        local wnSub = Instance.new("TextLabel")
+        wnSub.Size = UDim2.new(1, -40, 0, 16)
+        wnSub.Position = UDim2.new(0, 20, 0, 120)
+        wnSub.BackgroundTransparency = 1
+        wnSub.Text = "Origin's SOFB Hub — latest updates & improvements"
+        wnSub.TextColor3 = T.TextDim
+        wnSub.TextSize = 12
+        wnSub.Font = Enum.Font.Gotham
+        wnSub.ZIndex = 204
+        wnSub.Parent = wnCard
+
+        -- Divider
+        local wnDiv = Instance.new("Frame")
+        wnDiv.Size = UDim2.new(1, -40, 0, 1)
+        wnDiv.Position = UDim2.new(0, 20, 0, 148)
+        wnDiv.BackgroundColor3 = T.Accent
+        wnDiv.BackgroundTransparency = 0.6
+        wnDiv.BorderSizePixel = 0
+        wnDiv.ZIndex = 204
+        wnDiv.Parent = wnCard
+
+        -- ── Changelog entries ──
+        local entries = {
+            { icon = "🔐", color = Color3.fromRGB(255, 215, 0),   title = "SECRET Rarity ESP",   body = "Brainrots of SECRET rarity now appear in the ESP with golden highlighting and billboard labels." },
+            { icon = "🏛",  color = Color3.fromRGB(210, 105, 30),  title = "ANCIENT Rarity ESP",  body = "ANCIENT rarity support added — bronze/amber highlight and full filter toggle support." },
+            { icon = "✨", color = T.AccentGlow,                   title = "What's New Screen",   body = "This animated overlay now shows once per version so you never miss an update." },
+            { icon = "🐛", color = T.Success,                      title = "Bug Fixes & Polish",   body = "Misc ESP cleanup fixes and performance improvements to the rarity scan loop." },
+        }
+
+        local yBase = 162
+        for i, entry in ipairs(entries) do
+            local eRow = Instance.new("Frame")
+            eRow.Size = UDim2.new(1, -40, 0, 56)
+            eRow.Position = UDim2.new(0, 20, 0, yBase + (i - 1) * 66)
+            eRow.BackgroundColor3 = entry.color
+            eRow.BackgroundTransparency = 0.93
+            eRow.BorderSizePixel = 0
+            eRow.ZIndex = 204
+            eRow.Parent = wnCard
+            corner(eRow, 10)
+            stroke(eRow, entry.color, 1)
+
+            local eAccent = Instance.new("Frame")
+            eAccent.Size = UDim2.new(0, 3, 1, -12)
+            eAccent.Position = UDim2.new(0, 10, 0, 6)
+            eAccent.BackgroundColor3 = entry.color
+            eAccent.BorderSizePixel = 0
+            eAccent.ZIndex = 205
+            eAccent.Parent = eRow
+            corner(eAccent, 2)
+
+            local eIcon = Instance.new("TextLabel")
+            eIcon.Size = UDim2.new(0, 36, 0, 36)
+            eIcon.Position = UDim2.new(0, 18, 0.5, -18)
+            eIcon.BackgroundColor3 = entry.color
+            eIcon.BackgroundTransparency = 0.85
+            eIcon.Text = entry.icon
+            eIcon.TextSize = 18
+            eIcon.Font = Enum.Font.GothamBold
+            eIcon.ZIndex = 205
+            eIcon.Parent = eRow
+            corner(eIcon, 18)
+
+            local eTitle = Instance.new("TextLabel")
+            eTitle.Size = UDim2.new(1, -70, 0, 17)
+            eTitle.Position = UDim2.new(0, 62, 0, 8)
+            eTitle.BackgroundTransparency = 1
+            eTitle.Text = entry.title
+            eTitle.TextColor3 = entry.color
+            eTitle.TextSize = 13
+            eTitle.Font = Enum.Font.GothamBold
+            eTitle.TextXAlignment = Enum.TextXAlignment.Left
+            eTitle.ZIndex = 205
+            eTitle.Parent = eRow
+
+            local eBody = Instance.new("TextLabel")
+            eBody.Size = UDim2.new(1, -70, 0, 28)
+            eBody.Position = UDim2.new(0, 62, 0, 25)
+            eBody.BackgroundTransparency = 1
+            eBody.Text = entry.body
+            eBody.TextColor3 = T.TextDim
+            eBody.TextSize = 10
+            eBody.Font = Enum.Font.Gotham
+            eBody.TextXAlignment = Enum.TextXAlignment.Left
+            eBody.TextWrapped = true
+            eBody.ZIndex = 205
+            eBody.Parent = eRow
+        end
+
+        -- ── Dismiss button ──
+        local totalEntries = #entries
+        local btnY = yBase + totalEntries * 66 + 10
+
+        local wnDismiss = Instance.new("TextButton")
+        wnDismiss.Size = UDim2.new(1, -40, 0, 40)
+        wnDismiss.Position = UDim2.new(0, 20, 0, btnY)
+        wnDismiss.BackgroundColor3 = T.Accent
+        wnDismiss.BackgroundTransparency = 0.15
+        wnDismiss.Text = "⏳  Please wait... (3s)"
+        wnDismiss.TextColor3 = Color3.new(1, 1, 1)
+        wnDismiss.TextSize = 13
+        wnDismiss.Font = Enum.Font.GothamBold
+        wnDismiss.BorderSizePixel = 0
+        wnDismiss.AutoButtonColor = false
+        wnDismiss.ZIndex = 204
+        wnDismiss.Parent = wnCard
+        corner(wnDismiss, 10)
+        applyDarkGradient(wnDismiss)
+
+        local cardH = btnY + 58
+        local wnCanDismiss = false
+
+        -- ── Animate in ──
+        tw(wnBackdrop, {BackgroundTransparency = 0.05}, 0.5, Enum.EasingStyle.Quart)  -- Very dark backdrop
+        tw(wnDarkLayer, {BackgroundTransparency = 0.45}, 0.5, Enum.EasingStyle.Quart)
+        task.wait(0.15)
+        tw(wnCard, {Size = UDim2.new(0, 460, 0, cardH)}, 0.55, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        task.delay(0.2, function() tw(wnStroke, {Transparency = 0.3}, 0.4) end)
+
+        -- Hide hub while overlay is up
+        mainHub.Visible = false
+
+        -- Pulse the icon
+        task.spawn(function()
+            while wnIcon and wnIcon.Parent do
+                tw(wnIcon, {BackgroundTransparency = 0.65, TextSize = 34}, 0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                task.wait(0.8)
+                tw(wnIcon, {BackgroundTransparency = 0.82, TextSize = 30}, 0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                task.wait(0.8)
+            end
+        end)
+
+        -- 3-second countdown before dismiss is allowed
+        task.spawn(function()
+            for i = 3, 1, -1 do
+                task.wait(1)
+                if not (wnDismiss and wnDismiss.Parent) then return end
+                if i > 1 then
+                    wnDismiss.Text = "⏳  Please wait... ("..tostring(i-1).."s)"
+                else
+                    -- Unlock!
+                    wnCanDismiss = true
+                    wnDismiss.Text = "✨  Got it! Let's go"
+                    wnDismiss.TextColor3 = Color3.new(1, 1, 1)
+                    wnDismiss.TextSize = 14
+                    tw(wnDismiss, {BackgroundColor3 = T.Accent}, 0.3)
+                    tw(wnDismiss, {BackgroundTransparency = 0.1}, 0.3)
+                    wnDismiss.MouseEnter:Connect(function()
+                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.0, TextSize = 15}, 0.2, Enum.EasingStyle.Quint) end
+                    end)
+                    wnDismiss.MouseLeave:Connect(function()
+                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.1, TextSize = 14}, 0.2, Enum.EasingStyle.Quint) end
+                    end)
+                    wnDismiss.MouseButton1Down:Connect(function()
+                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.3, TextSize = 13}, 0.1) end
+                    end)
+                    wnDismiss.MouseButton1Up:Connect(function()
+                        if wnCanDismiss then tw(wnDismiss, {BackgroundTransparency = 0.0, TextSize = 15}, 0.1) end
+                    end)
+                end
+            end
+        end)
+
+        -- ── Dismiss ──
+        local function closeWhatsNew()
+            if not wnCanDismiss then return end
+            tw(wnCard, {Size = UDim2.new(0, 460, 0, 0), BackgroundTransparency = 1}, 0.35, Enum.EasingStyle.Quart)
+            tw(wnStroke, {Transparency = 1}, 0.25)
+            tw(wnBackdrop, {BackgroundTransparency = 1}, 0.4, Enum.EasingStyle.Quart)
+            tw(wnDarkLayer, {BackgroundTransparency = 1}, 0.35, Enum.EasingStyle.Quart)
+            -- Restore hub when overlay closes
+            mainHub.Visible = true
+            task.delay(0.45, function()
+                wnCard:Destroy()
+                wnBackdrop:Destroy()
+            end)
+        end
+
+        wnDismiss.MouseButton1Click:Connect(closeWhatsNew)
+
+        -- Backdrop click also respects the lock
+        wnBackdrop.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                closeWhatsNew()
+            end
+        end)
+    end)
+end
